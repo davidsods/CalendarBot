@@ -16,17 +16,30 @@ class ApprovalService:
         if not suggestion:
             return "not_found"
 
+        if action not in {"approve_create", "approve_update", "edit_then_approve", "reject"}:
+            return "invalid_action"
+
         if action == "reject":
             suggestion.status = SuggestionStatus.rejected
             self.session.flush()
             return "rejected"
 
-        if edited_title:
-            suggestion.title = edited_title
-
         normalized_action = action
         if action == "edit_then_approve":
-            normalized_action = "approve_update" if suggestion.action == "update" else "approve_create"
+            if suggestion.action == "update":
+                normalized_action = "approve_update"
+            elif suggestion.action == "create":
+                normalized_action = "approve_create"
+            else:
+                return "invalid_action"
+
+        if normalized_action == "approve_create" and suggestion.action != "create":
+            return "invalid_action"
+        if normalized_action == "approve_update" and suggestion.action != "update":
+            return "invalid_action"
+
+        if edited_title:
+            suggestion.title = edited_title
 
         if normalized_action == "approve_create" and suggestion.action == "create":
             google_event_id = self.google.create_event(suggestion.title)
