@@ -1,0 +1,26 @@
+[project]
+name = "scheduler-backend"
+version = "0.1.0"
+description = "Low-cost iMessage to Google Calendar assistant backend"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.116.0",
+  "uvicorn>=0.35.0",
+  "sqlalchemy>=2.0.41",
+  "pydantic>=2.11.0",
+  "pydantic-settings>=2.10.0",
+  "apscheduler>=3.10.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
