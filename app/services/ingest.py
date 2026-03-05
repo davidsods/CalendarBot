@@ -36,7 +36,7 @@ class IngestService:
         checkpoint_cutoff = checkpoint.last_successful_processed_at
         # Guard against a future-skewed checkpoint blocking all new ingestion.
         if checkpoint_cutoff and checkpoint_cutoff > now_utc + timedelta(minutes=5):
-            checkpoint_cutoff = now_utc
+            checkpoint_cutoff = None
 
         deduped = 0
         queued = 0

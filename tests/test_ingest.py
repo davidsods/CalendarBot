@@ -52,7 +52,7 @@ def test_ingest_ignores_future_skewed_checkpoint(db_session: Session) -> None:
     result = service.ingest_batch(
         "batch-1",
         [
-            _msg("m-now", now + timedelta(minutes=1)),
+            _msg("m-now", now),
         ],
     )
 
