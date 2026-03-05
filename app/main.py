@@ -30,39 +30,45 @@ from app.services.processor import ProcessorService
 app = FastAPI(title="Scheduler Backend", version="0.1.0")
 
 
+def _write_audit_log(session: Session, event_type: str, payload: dict[str, object]) -> None:
+    session.add(
+        AuditLog(
+            event_type=event_type,
+            payload=json.dumps(payload),
+        )
+    )
+    session.commit()
+
+
 def _process_slack_action(parsed_action: SlackParsedAction) -> None:
     with SessionLocal() as session:
         try:
             svc = ApprovalService(session)
             status = svc.handle_action(parsed_action.suggestion_id, parsed_action.action, parsed_action.edited_title)
-            session.add(
-                AuditLog(
-                    event_type="slack_action_processed",
-                    payload=json.dumps(
-                        {
-                            "suggestion_id": parsed_action.suggestion_id,
-                            "action": parsed_action.action,
-                            "status": status,
-                        }
-                    ),
-                )
+            _write_audit_log(
+                session,
+                "slack_action_processed",
+                {
+                    "suggestion_id": parsed_action.suggestion_id,
+                    "action": parsed_action.action,
+                    "status": status,
+                },
             )
-            session.commit()
         except Exception as exc:
             session.rollback()
-            session.add(
-                AuditLog(
-                    event_type="slack_action_failed",
-                    payload=json.dumps(
-                        {
-                            "suggestion_id": parsed_action.suggestion_id,
-                            "action": parsed_action.action,
-                            "error": str(exc),
-                        }
-                    ),
+            try:
+                _write_audit_log(
+                    session,
+                    "slack_action_failed",
+                    {
+                        "suggestion_id": parsed_action.suggestion_id,
+                        "action": parsed_action.action,
+                        "error": str(exc),
+                    },
                 )
-            )
-            session.commit()
+            except Exception:
+                # Never bubble background-task errors back into Slack callback handling.
+                session.rollback()
 
 
 @app.on_event("startup")
@@ -133,6 +139,7 @@ def llama_extract(payload: LlamaExtractRequest) -> LlamaExtractResponse:
 
 
 @app.post("/v1/slack/actions")
+@app.post("/v1/slack/actions/", include_in_schema=False)
 async def slack_actions(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -170,19 +177,18 @@ async def slack_actions(
         return {"status": status}
     except Exception as exc:
         session.rollback()
-        session.add(
-            AuditLog(
-                event_type="slack_action_failed",
-                payload=json.dumps(
-                    {
-                        "suggestion_id": parsed_action.suggestion_id,
-                        "action": parsed_action.action,
-                        "error": str(exc),
-                    }
-                ),
+        try:
+            _write_audit_log(
+                session,
+                "slack_action_failed",
+                {
+                    "suggestion_id": parsed_action.suggestion_id,
+                    "action": parsed_action.action,
+                    "error": str(exc),
+                },
             )
-        )
-        session.commit()
+        except Exception:
+            session.rollback()
         raise HTTPException(status_code=500, detail="failed to process Slack action") from exc
 
 
