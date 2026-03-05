@@ -5,6 +5,8 @@ import urllib.request
 from dataclasses import dataclass
 
 from app.config import settings
+from app.services.extraction_utils import heuristic_extract
+from app.services.ollama_adapter import OllamaExtractorClient
 
 
 @dataclass
@@ -16,14 +18,28 @@ class ExtractedCandidate:
 
 class LlamaExtractor:
     def _heuristic(self, text: str, has_existing_thread_event: bool) -> ExtractedCandidate:
-        lowered = text.lower()
-        if has_existing_thread_event and any(token in lowered for token in ["move", "resched", "push", "delay"]):
-            return ExtractedCandidate(action="update", title="Updated meeting", confidence=0.8)
-        if any(token in lowered for token in ["meet", "call", "appointment", "lunch", "tomorrow", "pm", "am"]):
-            return ExtractedCandidate(action="create", title="Meeting", confidence=0.7)
-        return ExtractedCandidate(action="ignore", title="", confidence=0.1)
+        action, title, confidence = heuristic_extract(text, has_existing_thread_event)
+        return ExtractedCandidate(action=action, title=title, confidence=confidence)
 
     def extract(self, text: str, has_existing_thread_event: bool) -> ExtractedCandidate:
+        if not settings.llama_extract_url:
+            # Prefer direct Ollama integration when configured (common Railway setup).
+            client = OllamaExtractorClient()
+            if client.configured():
+                try:
+                    result = client.extract(
+                        text=text,
+                        has_existing_thread_event=has_existing_thread_event,
+                        allowed_actions=["create", "update", "ignore"],
+                    )
+                    return ExtractedCandidate(
+                        action=str(result["action"]),
+                        title=str(result["title"]),
+                        confidence=float(result["confidence"]),
+                    )
+                except Exception:
+                    return self._heuristic(text, has_existing_thread_event)
+
         if not settings.llama_extract_url:
             return self._heuristic(text, has_existing_thread_event)
 

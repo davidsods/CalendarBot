@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class IngestMessage(BaseModel):
@@ -46,3 +46,15 @@ class GoogleOAuthStatusResponse(BaseModel):
     connected: bool
     has_refresh_token: bool
     expiry: datetime | None = None
+
+
+class LlamaExtractRequest(BaseModel):
+    message_text: str
+    has_existing_thread_event: bool = False
+    allowed_actions: list[str] = Field(default_factory=lambda: ["create", "update", "ignore"])
+
+
+class LlamaExtractResponse(BaseModel):
+    action: str
+    title: str
+    confidence: float

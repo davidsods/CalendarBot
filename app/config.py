@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     llama_extract_url: str | None = Field(default=None, alias="LLAMA_EXTRACT_URL")
     llama_api_key: str | None = Field(default=None, alias="LLAMA_API_KEY")
     llama_timeout_seconds: int = Field(default=30, alias="LLAMA_TIMEOUT_SECONDS")
+    ollama_base_url: str | None = Field(default=None, alias="OLLAMA_BASE_URL")
+    ollama_model: str = Field(default="llama3.2:1b", alias="OLLAMA_MODEL")
+    ollama_api_key: str | None = Field(default=None, alias="OLLAMA_API_KEY")
+    ollama_timeout_seconds: int = Field(default=30, alias="OLLAMA_TIMEOUT_SECONDS")
 
     slack_bot_token: str | None = Field(default=None, alias="SLACK_BOT_TOKEN")
     slack_signing_secret: str | None = Field(default=None, alias="SLACK_SIGNING_SECRET")

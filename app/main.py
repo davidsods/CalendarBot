@@ -12,15 +12,19 @@ from app.schemas import (
     GoogleOAuthStatusResponse,
     IngestRequest,
     IngestResponse,
+    LlamaExtractRequest,
+    LlamaExtractResponse,
     ProcessorRunResult,
     SlackActionRequest,
 )
 from app.scheduler import start_scheduler, stop_scheduler
 from app.services.approvals import ApprovalService
 from app.services.budget import BudgetService
+from app.services.extraction_utils import heuristic_extract
 from app.services.ingest import IngestService
 from app.services.integrations import GoogleOAuthService, SlackActionParser, SlackParsedAction
 from app.services.maintenance import MaintenanceService
+from app.services.ollama_adapter import OllamaExtractorClient
 from app.services.processor import ProcessorService
 
 app = FastAPI(title="Scheduler Backend", version="0.1.0")
@@ -95,6 +99,37 @@ def run_processor(session: Session = Depends(get_session)) -> ProcessorRunResult
         deferred=result.deferred,
         stopped_for_budget=result.stopped_for_budget,
     )
+
+
+@app.post("/v1/llama/extract", response_model=LlamaExtractResponse)
+def llama_extract(payload: LlamaExtractRequest) -> LlamaExtractResponse:
+    allowed = [action for action in payload.allowed_actions if action in {"create", "update", "ignore"}]
+    if not allowed:
+        allowed = ["create", "update", "ignore"]
+
+    client = OllamaExtractorClient()
+    if client.configured():
+        try:
+            result = client.extract(
+                text=payload.message_text,
+                has_existing_thread_event=payload.has_existing_thread_event,
+                allowed_actions=allowed,
+            )
+            return LlamaExtractResponse(
+                action=str(result["action"]),
+                title=str(result["title"]),
+                confidence=float(result["confidence"]),
+            )
+        except Exception:
+            pass
+
+    action, title, confidence = heuristic_extract(
+        payload.message_text,
+        payload.has_existing_thread_event,
+    )
+    if action not in allowed:
+        action = "ignore"
+    return LlamaExtractResponse(action=action, title=title, confidence=confidence)
 
 
 @app.post("/v1/slack/actions")
