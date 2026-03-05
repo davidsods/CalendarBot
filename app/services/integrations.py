@@ -23,18 +23,80 @@ class SlackParsedAction:
 
 
 class SlackNotifier:
-    def send_suggestion(self, suggestion_id: int, action: str) -> None:
+    @staticmethod
+    def _escape_mrkdwn(value: str) -> str:
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    @staticmethod
+    def _single_line(value: str) -> str:
+        return " ".join(value.split())
+
+    @staticmethod
+    def _truncate(value: str, limit: int = 180) -> str:
+        if len(value) <= limit:
+            return value
+        return value[: limit - 3].rstrip() + "..."
+
+    @staticmethod
+    def _format_utc(value: datetime | None) -> str:
+        if value is None:
+            return "Not extracted"
+        ts = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return ts.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    def _time_preview(self, action: str, start_at: datetime | None, end_at: datetime | None) -> str:
+        if start_at and end_at:
+            return f"{self._format_utc(start_at)} to {self._format_utc(end_at)}"
+        if start_at:
+            return f"Starts {self._format_utc(start_at)}"
+        if action == "create":
+            return "Not extracted. Approval creates a default 1-hour hold starting about 5 minutes from approval."
+        return "Not extracted"
+
+    def send_suggestion(
+        self,
+        suggestion_id: int,
+        action: str,
+        title: str | None = None,
+        thread_id: str | None = None,
+        source_text: str | None = None,
+        sent_at: datetime | None = None,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        target_event_ref: str | None = None,
+        confidence: float | None = None,
+    ) -> None:
         if not settings.slack_enabled or not settings.slack_bot_token or not settings.slack_channel_id:
             return
+
+        safe_title = self._escape_mrkdwn(title or "Meeting")
+        time_preview = self._escape_mrkdwn(self._time_preview(action, start_at, end_at))
+        action_label = action.upper()
+
+        fields: list[dict[str, str]] = [
+            {"type": "mrkdwn", "text": f"*Suggestion ID:*\n#{suggestion_id}"},
+            {"type": "mrkdwn", "text": f"*Action:*\n`{action_label}`"},
+            {"type": "mrkdwn", "text": f"*Proposed title:*\n{safe_title}"},
+            {"type": "mrkdwn", "text": f"*Proposed time:*\n{time_preview}"},
+        ]
+        if thread_id:
+            fields.append({"type": "mrkdwn", "text": f"*Thread:*\n`{self._escape_mrkdwn(thread_id)}`"})
+        if target_event_ref:
+            fields.append({"type": "mrkdwn", "text": f"*Target event:*\n`{self._escape_mrkdwn(target_event_ref)}`"})
+        if confidence is not None:
+            fields.append({"type": "mrkdwn", "text": f"*Confidence:*\n{confidence:.2f}"})
+        if sent_at is not None:
+            fields.append({"type": "mrkdwn", "text": f"*Message sent:*\n{self._format_utc(sent_at)}"})
 
         blocks = [
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"Suggestion #{suggestion_id} is ready for review. Proposed action: *{action}*.",
+                    "text": "*Calendar suggestion ready for approval*",
                 },
             },
+            {"type": "section", "fields": fields},
             {
                 "type": "actions",
                 "elements": [
@@ -55,10 +117,22 @@ class SlackNotifier:
                 ],
             },
         ]
+        if source_text:
+            snippet = self._truncate(self._single_line(source_text))
+            blocks.insert(
+                2,
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Source message:*\n>{self._escape_mrkdwn(snippet)}",
+                    },
+                },
+            )
 
         payload = {
             "channel": settings.slack_channel_id,
-            "text": f"Suggestion #{suggestion_id}",
+            "text": f"Suggestion #{suggestion_id}: {action_label} {title or 'Meeting'}",
             "blocks": blocks,
         }
 
@@ -98,11 +172,21 @@ class SlackActionParser:
         if not settings.slack_signing_secret:
             return False
 
-        now_ts = int(datetime.now(timezone.utc).timestamp())
-        if abs(now_ts - int(slack_timestamp)) > 60 * 5:
+        try:
+            request_ts = int(slack_timestamp)
+        except (TypeError, ValueError):
             return False
 
-        sig_basestring = f"v0:{slack_timestamp}:{raw_body.decode('utf-8')}".encode("utf-8")
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        if abs(now_ts - request_ts) > 60 * 5:
+            return False
+
+        try:
+            body_text = raw_body.decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+
+        sig_basestring = f"v0:{slack_timestamp}:{body_text}".encode("utf-8")
         digest = hmac.new(
             settings.slack_signing_secret.encode("utf-8"),
             sig_basestring,
@@ -113,27 +197,30 @@ class SlackActionParser:
 
     @staticmethod
     def parse_form_encoded_payload(raw_body: bytes) -> SlackParsedAction | None:
-        parsed = urllib.parse.parse_qs(raw_body.decode("utf-8"))
-        payload_raw = parsed.get("payload", [None])[0]
-        if not payload_raw:
+        try:
+            parsed = urllib.parse.parse_qs(raw_body.decode("utf-8"))
+            payload_raw = parsed.get("payload", [None])[0]
+            if not payload_raw:
+                return None
+
+            payload = json.loads(payload_raw)
+            action_obj = (payload.get("actions") or [{}])[0]
+            action_id = action_obj.get("action_id")
+            value = action_obj.get("value")
+            if not value:
+                return None
+
+            if action_id == "reject":
+                mapped = "reject"
+            elif action_id == "approve":
+                # Let approval service decide create vs update from suggestion state.
+                mapped = "edit_then_approve"
+            else:
+                mapped = "edit_then_approve"
+
+            return SlackParsedAction(suggestion_id=int(value), action=mapped)
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
             return None
-
-        payload = json.loads(payload_raw)
-        action_obj = (payload.get("actions") or [{}])[0]
-        action_id = action_obj.get("action_id")
-        value = action_obj.get("value")
-        if not value:
-            return None
-
-        if action_id == "reject":
-            mapped = "reject"
-        elif action_id == "approve":
-            # Let approval service decide create vs update from suggestion state.
-            mapped = "edit_then_approve"
-        else:
-            mapped = "edit_then_approve"
-
-        return SlackParsedAction(suggestion_id=int(value), action=mapped)
 
 
 class GoogleOAuthService:

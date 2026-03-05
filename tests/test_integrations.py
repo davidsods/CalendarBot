@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.db import Base
-from app.services.integrations import GoogleCalendarClient, SlackActionParser
+from app.services.integrations import GoogleCalendarClient, SlackActionParser, SlackNotifier
 from app.services.ollama_adapter import OllamaExtractorClient
 from app.services.extractor import LlamaExtractor
 
@@ -62,6 +62,53 @@ def test_slack_signature_and_payload_parser() -> None:
     assert parsed is not None
     assert parsed.suggestion_id == 42
     assert parsed.action == "edit_then_approve"
+
+
+def test_slack_notifier_sends_calendar_preview(monkeypatch) -> None:
+    orig_enabled = settings.slack_enabled
+    orig_token = settings.slack_bot_token
+    orig_channel = settings.slack_channel_id
+    try:
+        settings.slack_enabled = True
+        settings.slack_bot_token = "xoxb-test"
+        settings.slack_channel_id = "C123"
+
+        captured: dict[str, object] = {}
+
+        def _fake_urlopen(req: urllib.request.Request, timeout: int):  # type: ignore[no-untyped-def]
+            assert req.full_url == "https://slack.com/api/chat.postMessage"
+            assert timeout == 15
+            captured["payload"] = json.loads(req.data.decode("utf-8"))  # type: ignore[union-attr]
+            return _FakeHTTPResponse({"ok": True})
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+        SlackNotifier().send_suggestion(
+            suggestion_id=12,
+            action="create",
+            title="Project Sync",
+            thread_id="thread-123",
+            source_text="Can we do Friday at 3pm for the launch sync?",
+            sent_at=datetime(2026, 3, 4, 18, 30, tzinfo=timezone.utc),
+            target_event_ref="evt_abc123",
+            confidence=0.91,
+        )
+
+        payload = captured["payload"]
+        assert isinstance(payload, dict)
+        assert payload["channel"] == "C123"
+        blocks_json = json.dumps(payload["blocks"])  # type: ignore[index]
+        assert "Calendar suggestion ready for approval" in blocks_json
+        assert "Proposed title" in blocks_json
+        assert "Project Sync" in blocks_json
+        assert "Source message" in blocks_json
+        assert "thread-123" in blocks_json
+        assert "evt_abc123" in blocks_json
+        assert "default 1-hour hold" in blocks_json
+    finally:
+        settings.slack_enabled = orig_enabled
+        settings.slack_bot_token = orig_token
+        settings.slack_channel_id = orig_channel
 
 
 def test_google_calendar_client_fallback_without_oauth_token() -> None:

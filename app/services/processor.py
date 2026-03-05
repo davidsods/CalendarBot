@@ -76,7 +76,18 @@ class ProcessorService:
         self.session.flush()
 
         try:
-            self.slack.send_suggestion(suggestion.id, suggestion.action)
+            self.slack.send_suggestion(
+                suggestion_id=suggestion.id,
+                action=suggestion.action,
+                title=suggestion.title,
+                thread_id=suggestion.thread_id,
+                source_text=msg.text,
+                sent_at=msg.sent_at,
+                start_at=suggestion.start_at,
+                end_at=suggestion.end_at,
+                target_event_ref=suggestion.target_event_ref,
+                confidence=suggestion.confidence,
+            )
         except Exception as exc:
             self.session.add(
                 AuditLog(
