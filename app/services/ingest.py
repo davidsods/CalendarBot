@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -32,6 +32,12 @@ class IngestService:
 
     def ingest_batch(self, batch_id: str, messages: list[IngestMessage]) -> IngestResult:
         checkpoint = self._checkpoint()
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        checkpoint_cutoff = checkpoint.last_successful_processed_at
+        # Guard against a future-skewed checkpoint blocking all new ingestion.
+        if checkpoint_cutoff and checkpoint_cutoff > now_utc + timedelta(minutes=5):
+            checkpoint_cutoff = now_utc
+
         deduped = 0
         queued = 0
 
@@ -50,7 +56,7 @@ class IngestService:
                 deduped += 1
                 continue
 
-            if checkpoint.last_successful_processed_at and sent_at <= checkpoint.last_successful_processed_at:
+            if checkpoint_cutoff and sent_at <= checkpoint_cutoff:
                 deduped += 1
                 continue
 

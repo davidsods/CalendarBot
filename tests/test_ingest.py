@@ -43,6 +43,25 @@ def test_ingest_respects_checkpoint_cutoff(db_session: Session) -> None:
     assert len(queued) == 1
 
 
+def test_ingest_ignores_future_skewed_checkpoint(db_session: Session) -> None:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    db_session.add(ProcessingCheckpoint(id=1, last_successful_processed_at=now + timedelta(days=1)))
+    db_session.flush()
+
+    service = IngestService(db_session)
+    result = service.ingest_batch(
+        "batch-1",
+        [
+            _msg("m-now", now + timedelta(minutes=1)),
+        ],
+    )
+
+    record = db_session.scalar(select(MessageRecord).where(MessageRecord.external_message_id == "m-now"))
+    assert result.deduped == 0
+    assert result.queued == 1
+    assert record is not None
+
+
 def test_ingest_normalizes_timezone_aware_datetimes_to_naive_utc(db_session: Session) -> None:
     pacific = timezone(timedelta(hours=-8))
     aware = datetime(2026, 3, 1, 9, 30, tzinfo=pacific)
