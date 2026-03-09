@@ -313,8 +313,17 @@ class GoogleCalendarClient:
     def _token_record(self) -> GoogleOAuthToken | None:
         return self.session.query(GoogleOAuthToken).filter(GoogleOAuthToken.user_id == self.user_id).one_or_none()
 
+    @staticmethod
+    def _as_aware_utc(value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
     def _refresh_if_needed(self, token: GoogleOAuthToken) -> GoogleOAuthToken:
-        if token.expiry and token.expiry > datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=2):
+        expiry_utc = self._as_aware_utc(token.expiry)
+        if expiry_utc and expiry_utc > datetime.now(timezone.utc) + timedelta(minutes=2):
             return token
         if not token.refresh_token:
             return token
@@ -341,7 +350,7 @@ class GoogleCalendarClient:
         token.access_token = payload.get("access_token", token.access_token)
         expires_in = payload.get("expires_in")
         if expires_in:
-            token.expiry = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(seconds=int(expires_in))
+            token.expiry = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
         self.session.flush()
         return token
 

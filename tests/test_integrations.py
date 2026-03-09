@@ -5,13 +5,14 @@ import hmac
 import json
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.db import Base
+from app.models import GoogleOAuthToken
 from app.services.integrations import GoogleCalendarClient, SlackActionParser, SlackNotifier
 from app.services.ollama_adapter import OllamaExtractorClient
 from app.services.extractor import LlamaExtractor
@@ -117,6 +118,22 @@ def test_google_calendar_client_fallback_without_oauth_token() -> None:
 
     event_id = client.create_event("Planning Call")
     assert event_id.startswith("gcal_planning_call_")
+
+
+def test_google_calendar_client_handles_aware_expiry_without_type_error() -> None:
+    session = _session()
+    token = GoogleOAuthToken(
+        user_id="default",
+        access_token="token",
+        refresh_token=None,
+        expiry=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    session.add(token)
+    session.commit()
+
+    client = GoogleCalendarClient(session)
+    refreshed = client._refresh_if_needed(token)
+    assert refreshed is token
 
 
 def test_ollama_extractor_client_parses_response(monkeypatch) -> None:
