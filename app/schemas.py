@@ -36,6 +36,22 @@ class ProcessorRunResult(BaseModel):
     processed: int
     deferred: int
     stopped_for_budget: bool
+    skipped_for_window: bool = False
+
+
+class DailyCostPoint(BaseModel):
+    day: str
+    processed_threads: int
+    model_invocations: int
+    gated_skips: int
+    deferred_by_budget: int
+    estimated_model_spend_usd: float
+
+
+class CostSummaryResponse(BaseModel):
+    lookback_days: int
+    points: list[DailyCostPoint]
+    totals: DailyCostPoint
 
 
 class GoogleOAuthCallbackRequest(BaseModel):

@@ -12,6 +12,10 @@ class Settings(BaseSettings):
 
     processor_interval_hours: int = Field(default=3, alias="PROCESSOR_INTERVAL_HOURS")
     processor_interval_seconds: int | None = Field(default=None, alias="PROCESSOR_INTERVAL_SECONDS")
+    processor_mode: str = Field(default="inprocess", alias="PROCESSOR_MODE")
+    processor_tz: str = Field(default="America/Los_Angeles", alias="PROCESSOR_TZ")
+    processor_active_start_hour: int = Field(default=0, alias="PROCESSOR_ACTIVE_START_HOUR")
+    processor_active_end_hour: int = Field(default=24, alias="PROCESSOR_ACTIVE_END_HOUR")
     monthly_budget_cap_usd: float = Field(default=15.0, alias="MONTHLY_BUDGET_CAP_USD")
     budget_safety_buffer_usd: float = Field(default=1.0, alias="BUDGET_SAFETY_BUFFER_USD")
     estimated_llama_cost_per_message_usd: float = Field(
@@ -22,6 +26,8 @@ class Settings(BaseSettings):
     raw_retention_hours: int = Field(default=24, alias="RAW_RETENTION_HOURS")
     default_timezone: str = Field(default="America/Los_Angeles", alias="DEFAULT_TIMEZONE")
     thread_context_window_messages: int = Field(default=30, alias="THREAD_CONTEXT_WINDOW_MESSAGES")
+    thread_coalesce_window_minutes: int = Field(default=0, alias="THREAD_COALESCE_WINDOW_MINUTES")
+    llama_gate_mode: str = Field(default="aggressive", alias="LLAMA_GATE_MODE")
 
     llama_extract_url: str | None = Field(default=None, alias="LLAMA_EXTRACT_URL")
     llama_api_key: str | None = Field(default=None, alias="LLAMA_API_KEY")

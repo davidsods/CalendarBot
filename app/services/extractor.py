@@ -34,6 +34,7 @@ class ExtractedCandidate:
     decision_rationale: str | None = None
     should_generate: bool = False
     conflict_note: str | None = None
+    model_invoked: bool = False
 
 
 class LlamaExtractor:
@@ -56,6 +57,7 @@ class LlamaExtractor:
                         action=str(result["action"]),
                         title=str(result["title"]),
                         confidence=float(result["confidence"]),
+                        model_invoked=True,
                     )
                 except Exception:
                     return self._heuristic(text, has_existing_thread_event)
@@ -89,7 +91,7 @@ class LlamaExtractor:
 
                 if action not in {"create", "update", "ignore"}:
                     return self._heuristic(text, has_existing_thread_event)
-                return ExtractedCandidate(action=action, title=title, confidence=confidence)
+                return ExtractedCandidate(action=action, title=title, confidence=confidence, model_invoked=True)
         except Exception:
             return self._heuristic(text, has_existing_thread_event)
 
@@ -111,13 +113,22 @@ class LlamaExtractor:
                 slot_candidates=[],
             )
 
-        combined_text = "\n".join(str(m.get("text", "")) for m in messages if m.get("text"))
-        llm_candidate = self.extract(combined_text, has_existing_thread_event)
         decision: ThreadDecision = evaluate_thread_state(
             messages=messages,
             default_timezone=settings.default_timezone,
             existing_slots=existing_slots,
         )
+        combined_text = "\n".join(str(m.get("text", "")) for m in messages if m.get("text"))
+        llm_candidate = self._heuristic(combined_text, has_existing_thread_event)
+        gate_mode = (settings.llama_gate_mode or "aggressive").strip().lower()
+        should_call_model = decision.should_generate
+        if gate_mode == "quality":
+            should_call_model = True
+        elif gate_mode == "balanced":
+            should_call_model = decision.should_generate or decision.confidence_tier in {"ambiguous", "conflicted"}
+        if should_call_model:
+            llm_candidate = self.extract(combined_text, has_existing_thread_event)
+
         recommended_slot = None
         if decision.recommended_slot_key:
             recommended_slot = next((s for s in decision.slot_candidates if s.slot_key == decision.recommended_slot_key), None)
@@ -153,4 +164,5 @@ class LlamaExtractor:
             decision_rationale=decision.decision_rationale,
             should_generate=decision.should_generate,
             conflict_note=decision.conflict_note,
+            model_invoked=llm_candidate.model_invoked,
         )

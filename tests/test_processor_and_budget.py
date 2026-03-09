@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
+from zoneinfo import ZoneInfo
 
 from app.config import settings
 from app.db import Base
@@ -167,3 +168,65 @@ def test_reschedule_creates_update_suggestion_not_duplicate() -> None:
     assert len(suggestions) == 2
     assert suggestions[-1].action == "update"
     assert suggestions[-1].target_event_ref is not None
+
+
+def test_run_once_skips_outside_active_window() -> None:
+    settings.processor_tz = "America/Los_Angeles"
+    settings.processor_active_start_hour = 6
+    settings.processor_active_end_hour = 24
+
+    session = _session()
+    _ingest_messages(session, 1)
+
+    # 2026-03-08 12:30 UTC = 04:30 PT (outside window)
+    now_utc = datetime(2026, 3, 8, 12, 30, tzinfo=ZoneInfo("UTC"))
+    result = ProcessorService(session).run_once(now_utc=now_utc)
+    session.commit()
+
+    assert result.processed == 0
+    assert result.deferred == 0
+    assert result.stopped_for_budget is False
+    assert result.skipped_for_window is True
+
+    statuses = session.scalars(select(QueueItem.status)).all()
+    assert statuses.count(QueueStatus.pending) == 1
+
+
+def test_thread_coalescing_processes_latest_message_once() -> None:
+    settings.thread_coalesce_window_minutes = 60
+    settings.monthly_budget_cap_usd = 100.0
+    settings.budget_safety_buffer_usd = 1.0
+    settings.estimated_llama_cost_per_message_usd = 0.1
+
+    session = _session()
+    _ingest_messages(session, 3, thread_id="thread-coalesce")
+
+    result = ProcessorService(session).run_once()
+    session.commit()
+
+    assert result.processed == 1
+    statuses = session.scalars(select(QueueItem.status)).all()
+    assert statuses.count(QueueStatus.completed) == 3
+
+    deferred_reasons = session.scalars(select(QueueItem.deferred_reason)).all()
+    assert deferred_reasons.count("coalesced_thread_window") == 2
+
+
+def test_active_window_boundaries_midnight_and_six_am_pt_on_dst_date() -> None:
+    settings.processor_tz = "America/Los_Angeles"
+    settings.processor_active_start_hour = 6
+    settings.processor_active_end_hour = 24
+
+    session = _session()
+    _ingest_messages(session, 1, thread_id="dst-thread")
+
+    svc = ProcessorService(session)
+    # 2026-03-08 08:01 UTC = 00:01 PT (DST start day), must skip.
+    skipped = svc.run_once(now_utc=datetime(2026, 3, 8, 8, 1, tzinfo=ZoneInfo("UTC")))
+    assert skipped.skipped_for_window is True
+
+    # 2026-03-08 13:05 UTC = 06:05 PT (same day), must process.
+    processed = svc.run_once(now_utc=datetime(2026, 3, 8, 13, 5, tzinfo=ZoneInfo("UTC")))
+    session.commit()
+    assert processed.skipped_for_window is False
+    assert processed.processed == 1

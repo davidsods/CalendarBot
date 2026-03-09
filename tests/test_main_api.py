@@ -162,3 +162,38 @@ def test_llama_extract_allowed_actions_filter_behavior(client: TestClient) -> No
     )
     assert fallback.status_code == 200
     assert fallback.json()["action"] == "create"
+
+
+def test_processor_run_includes_window_skip_flag(client: TestClient) -> None:
+    settings.processor_tz = "America/Los_Angeles"
+    settings.processor_active_start_hour = 6
+    settings.processor_active_end_hour = 24
+
+    response = client.post("/v1/processor/run")
+    assert response.status_code == 200
+    body = response.json()
+    assert "skipped_for_window" in body
+
+
+def test_costs_summary_endpoint_shape(client: TestClient, db_session: Session) -> None:
+    db_session.add(
+        AuditLog(
+            event_type="llama_invoked",
+            payload=json.dumps({"thread_id": "t1"}),
+        )
+    )
+    db_session.add(
+        AuditLog(
+            event_type="thread_processed",
+            payload=json.dumps({"thread_id": "t1"}),
+        )
+    )
+    db_session.commit()
+
+    response = client.get("/v1/costs/summary")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["lookback_days"] == 30
+    assert "points" in body
+    assert "totals" in body
+    assert body["totals"]["model_invocations"] >= 1
