@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 from app.config import settings
-from app.services.extraction_utils import heuristic_extract, parse_schedule, summarize_thread
+from app.services.extraction_utils import (
+    SlotCandidate,
+    ThreadDecision,
+    evaluate_thread_state,
+    heuristic_extract,
+)
 from app.services.ollama_adapter import OllamaExtractorClient
 
 
@@ -22,6 +27,13 @@ class ExtractedCandidate:
     timezone: str | None = None
     reason_summary: str | None = None
     evidence_message_ids: list[int] | None = None
+    thread_state: str = "exploring"
+    confidence_tier: str = "ambiguous"
+    recommended_slot_key: str | None = None
+    slot_candidates: list[SlotCandidate] | None = None
+    decision_rationale: str | None = None
+    should_generate: bool = False
+    conflict_note: str | None = None
 
 
 class LlamaExtractor:
@@ -86,6 +98,7 @@ class LlamaExtractor:
         messages: list[dict[str, object]],
         has_existing_thread_event: bool,
         reference_utc: datetime,
+        existing_slots: list[SlotCandidate] | None = None,
     ) -> ExtractedCandidate:
         if not messages:
             return ExtractedCandidate(
@@ -95,34 +108,49 @@ class LlamaExtractor:
                 timezone=settings.default_timezone,
                 reason_summary="No messages in thread context.",
                 evidence_message_ids=[],
+                slot_candidates=[],
             )
 
         combined_text = "\n".join(str(m.get("text", "")) for m in messages if m.get("text"))
         llm_candidate = self.extract(combined_text, has_existing_thread_event)
-        parsed = parse_schedule(combined_text, reference_utc, settings.default_timezone)
-
-        evidence = [int(m["id"]) for m in messages[-6:] if isinstance(m.get("id"), int)]
-        summary = summarize_thread(messages)
+        decision: ThreadDecision = evaluate_thread_state(
+            messages=messages,
+            default_timezone=settings.default_timezone,
+            existing_slots=existing_slots,
+        )
+        recommended_slot = None
+        if decision.recommended_slot_key:
+            recommended_slot = next((s for s in decision.slot_candidates if s.slot_key == decision.recommended_slot_key), None)
 
         # High recall: if schedule signals exist, treat as create unless this clearly looks like an update.
-        if parsed.event_date and llm_candidate.action == "ignore":
+        if recommended_slot and llm_candidate.action == "ignore":
             llm_candidate.action = "update" if has_existing_thread_event else "create"
-            llm_candidate.confidence = max(llm_candidate.confidence, 0.65)
+            llm_candidate.confidence = max(llm_candidate.confidence, 0.6)
 
         if has_existing_thread_event and llm_candidate.action == "create":
             lowered = combined_text.lower()
             if any(token in lowered for token in ["move", "resched", "reschedule", "push", "delay", "instead"]):
                 llm_candidate.action = "update"
 
+        if not decision.should_generate:
+            llm_candidate.action = "ignore"
+
         return ExtractedCandidate(
             action=llm_candidate.action,
             title=llm_candidate.title or "Meeting",
-            confidence=llm_candidate.confidence,
-            event_date=parsed.event_date,
-            start_at=parsed.start_at_utc,
-            end_at=parsed.end_at_utc,
-            is_all_day=parsed.is_all_day,
-            timezone=parsed.timezone,
-            reason_summary=summary,
-            evidence_message_ids=evidence,
+            confidence=max(llm_candidate.confidence, decision.decision_confidence),
+            event_date=recommended_slot.event_date if recommended_slot else None,
+            start_at=recommended_slot.start_at if recommended_slot else None,
+            end_at=recommended_slot.end_at if recommended_slot else None,
+            is_all_day=bool(recommended_slot.is_all_day) if recommended_slot else False,
+            timezone=recommended_slot.timezone if recommended_slot else settings.default_timezone,
+            reason_summary=decision.decision_rationale,
+            evidence_message_ids=decision.evidence_message_ids,
+            thread_state=decision.thread_state,
+            confidence_tier=decision.confidence_tier,
+            recommended_slot_key=decision.recommended_slot_key,
+            slot_candidates=decision.slot_candidates,
+            decision_rationale=decision.decision_rationale,
+            should_generate=decision.should_generate,
+            conflict_note=decision.conflict_note,
         )

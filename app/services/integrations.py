@@ -95,6 +95,7 @@ class SlackNotifier:
         confidence: float | None = None,
         thread_summary: str | None = None,
         evidence_messages: list[dict[str, object]] | None = None,
+        confidence_tier: str | None = None,
     ) -> None:
         if not settings.slack_enabled or not settings.slack_bot_token or not settings.slack_channel_id:
             return
@@ -124,6 +125,8 @@ class SlackNotifier:
             fields.append({"type": "mrkdwn", "text": f"*Target event:*\n`{self._escape_mrkdwn(target_event_ref)}`"})
         if confidence is not None:
             fields.append({"type": "mrkdwn", "text": f"*Confidence:*\n{confidence:.2f}"})
+        if confidence_tier:
+            fields.append({"type": "mrkdwn", "text": f"*Confidence tier:*\n`{self._escape_mrkdwn(confidence_tier)}`"})
         if sent_at is not None:
             fields.append({"type": "mrkdwn", "text": f"*Message sent:*\n{self._format_utc(sent_at)}"})
         if timezone_name:

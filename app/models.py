@@ -97,6 +97,9 @@ class EventSuggestion(Base):
     reason_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     evidence_message_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     context_window_size: Mapped[int] = mapped_column(Integer, default=0, nullable=True)
+    thread_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    confidence_tier: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    slot_candidate_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[SuggestionStatus] = mapped_column(Enum(SuggestionStatus), default=SuggestionStatus.pending_approval)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -108,6 +111,45 @@ class CalendarLink(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     thread_id: Mapped[str] = mapped_column(String(255), index=True)
     google_event_id: Mapped[str] = mapped_column(String(255), unique=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ThreadPlanningState(Base):
+    __tablename__ = "thread_planning_states"
+    __table_args__ = (UniqueConstraint("thread_id", name="uq_thread_planning_state_thread"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(255), index=True)
+    state: Mapped[str] = mapped_column(String(32), default="exploring", index=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recommended_slot_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    decision_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    decision_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ThreadSlotCandidate(Base):
+    __tablename__ = "thread_slot_candidates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    thread_id: Mapped[str] = mapped_column(String(255), index=True)
+    slot_key: Mapped[str] = mapped_column(String(128), index=True)
+    event_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_all_day: Mapped[bool] = mapped_column(Boolean, default=False)
+    timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    title: Mapped[str] = mapped_column(String(255), default="Meeting")
+    proposer_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    supporting_message_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    contradicting_message_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    recency_score: Mapped[float] = mapped_column(Float, default=0.0)
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    last_evidence_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
