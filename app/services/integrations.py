@@ -7,7 +7,8 @@ import urllib.parse
 import urllib.request
 import urllib.error
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -46,13 +47,36 @@ class SlackNotifier:
         return ts.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     def _time_preview(self, action: str, start_at: datetime | None, end_at: datetime | None) -> str:
+        return self._time_preview_with_date(action, start_at, end_at, None, False, None)
+
+    def _time_preview_with_date(
+        self,
+        action: str,
+        start_at: datetime | None,
+        end_at: datetime | None,
+        event_date: date | None,
+        is_all_day: bool,
+        timezone_name: str | None,
+    ) -> str:
+        tz_label = timezone_name or "UTC"
+        if is_all_day and event_date:
+            return f"All-day on {event_date.isoformat()} ({tz_label})"
         if start_at and end_at:
-            return f"{self._format_utc(start_at)} to {self._format_utc(end_at)}"
+            start = self._format_in_tz(start_at, timezone_name)
+            end = self._format_in_tz(end_at, timezone_name)
+            return f"{start} to {end}"
         if start_at:
-            return f"Starts {self._format_utc(start_at)}"
-        if action == "create":
-            return "Not extracted. Approval creates a default 1-hour hold starting about 5 minutes from approval."
+            return f"Starts {self._format_in_tz(start_at, timezone_name)}"
+        if event_date:
+            return f"Date extracted ({event_date.isoformat()}) but time missing. Approval creates all-day."
         return "Not extracted"
+
+    @staticmethod
+    def _format_in_tz(value: datetime, timezone_name: str | None) -> str:
+        tz = ZoneInfo(timezone_name or "UTC")
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        local = dt.astimezone(tz)
+        return local.strftime("%Y-%m-%d %I:%M %p %Z")
 
     def send_suggestion(
         self,
@@ -64,14 +88,28 @@ class SlackNotifier:
         sent_at: datetime | None = None,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
+        event_date: date | None = None,
+        is_all_day: bool = False,
+        timezone_name: str | None = None,
         target_event_ref: str | None = None,
         confidence: float | None = None,
+        thread_summary: str | None = None,
+        evidence_messages: list[dict[str, object]] | None = None,
     ) -> None:
         if not settings.slack_enabled or not settings.slack_bot_token or not settings.slack_channel_id:
             return
 
         safe_title = self._escape_mrkdwn(title or "Meeting")
-        time_preview = self._escape_mrkdwn(self._time_preview(action, start_at, end_at))
+        time_preview = self._escape_mrkdwn(
+            self._time_preview_with_date(
+                action=action,
+                start_at=start_at,
+                end_at=end_at,
+                event_date=event_date,
+                is_all_day=is_all_day,
+                timezone_name=timezone_name,
+            )
+        )
         action_label = action.upper()
 
         fields: list[dict[str, str]] = [
@@ -88,6 +126,11 @@ class SlackNotifier:
             fields.append({"type": "mrkdwn", "text": f"*Confidence:*\n{confidence:.2f}"})
         if sent_at is not None:
             fields.append({"type": "mrkdwn", "text": f"*Message sent:*\n{self._format_utc(sent_at)}"})
+        if timezone_name:
+            fields.append({"type": "mrkdwn", "text": f"*Timezone:*\n`{self._escape_mrkdwn(timezone_name)}`"})
+        if event_date:
+            fields.append({"type": "mrkdwn", "text": f"*Event date:*\n{event_date.isoformat()}"})
+        fields.append({"type": "mrkdwn", "text": f"*All-day:*\n`{'yes' if is_all_day else 'no'}`"})
 
         blocks = [
             {
@@ -98,6 +141,47 @@ class SlackNotifier:
                 },
             },
             {"type": "section", "fields": fields},
+        ]
+        if thread_summary:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Thread summary:*\n{self._escape_mrkdwn(thread_summary)}",
+                    },
+                }
+            )
+        if source_text:
+            snippet = self._truncate(self._single_line(source_text))
+            blocks.insert(
+                3,
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Source message:*\n>{self._escape_mrkdwn(snippet)}",
+                    },
+                },
+            )
+        if evidence_messages:
+            evidence_lines: list[str] = []
+            for msg in evidence_messages[:6]:
+                role = "Me" if msg.get("sender_role") == "self" else "Them"
+                text = self._truncate(self._single_line(str(msg.get("text", ""))), limit=120)
+                evidence_lines.append(f"*{role}:* {self._escape_mrkdwn(text)}")
+            if evidence_lines:
+                blocks.append(
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": "*Evidence snippets:*\n" + "\n".join(evidence_lines),
+                        },
+                    }
+                )
+
+        blocks.append(
             {
                 "type": "actions",
                 "elements": [
@@ -116,20 +200,8 @@ class SlackNotifier:
                         "value": str(suggestion_id),
                     },
                 ],
-            },
-        ]
-        if source_text:
-            snippet = self._truncate(self._single_line(source_text))
-            blocks.insert(
-                2,
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*Source message:*\n>{self._escape_mrkdwn(snippet)}",
-                    },
-                },
-            )
+            }
+        )
 
         payload = {
             "channel": settings.slack_channel_id,
@@ -389,21 +461,38 @@ class GoogleCalendarClient:
         with urllib.request.urlopen(req, timeout=20) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
-    def create_event(self, title: str) -> str:
+    def create_event(
+        self,
+        title: str,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        event_date: date | None = None,
+        is_all_day: bool = False,
+        timezone_name: str | None = None,
+    ) -> str:
         url = f"{self.BASE_URL}/calendars/{urllib.parse.quote(settings.google_calendar_id, safe='')}/events"
-        start_at = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=5)
-        end_at = start_at + timedelta(hours=1)
-        payload = {
-            "summary": title,
-            "start": {
-                "dateTime": start_at.isoformat(),
-                "timeZone": "UTC",
-            },
-            "end": {
-                "dateTime": end_at.isoformat(),
-                "timeZone": "UTC",
-            },
-        }
+        payload: dict[str, object] = {"summary": title}
+        if is_all_day and event_date is not None:
+            payload["start"] = {"date": event_date.isoformat()}
+            payload["end"] = {"date": (event_date + timedelta(days=1)).isoformat()}
+        elif start_at is not None:
+            tz_name = timezone_name or settings.default_timezone
+            tz = ZoneInfo(tz_name)
+            start_aware = start_at.replace(tzinfo=timezone.utc) if start_at.tzinfo is None else start_at
+            if end_at is None:
+                end_at = (start_aware.astimezone(timezone.utc).replace(tzinfo=None) + timedelta(hours=1))
+            end_aware = end_at.replace(tzinfo=timezone.utc) if end_at.tzinfo is None else end_at
+            payload["start"] = {
+                "dateTime": start_aware.astimezone(tz).isoformat(),
+                "timeZone": tz_name,
+            }
+            payload["end"] = {
+                "dateTime": end_aware.astimezone(tz).isoformat(),
+                "timeZone": tz_name,
+            }
+        else:
+            raise RuntimeError("missing_schedule")
+
         response = self._authorized_request("POST", url, payload)
         if response and response.get("id"):
             return str(response["id"])
@@ -412,11 +501,38 @@ class GoogleCalendarClient:
         ts = int(datetime.now(timezone.utc).timestamp())
         return f"gcal_{title.lower().replace(' ', '_')}_{ts}"
 
-    def update_event(self, google_event_id: str, title: str) -> str:
+    def update_event(
+        self,
+        google_event_id: str,
+        title: str,
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        event_date: date | None = None,
+        is_all_day: bool = False,
+        timezone_name: str | None = None,
+    ) -> str:
         url = (
             f"{self.BASE_URL}/calendars/{urllib.parse.quote(settings.google_calendar_id, safe='')}/events/"
             f"{urllib.parse.quote(google_event_id, safe='')}"
         )
-        payload = {"summary": title}
+        payload: dict[str, object] = {"summary": title}
+        if is_all_day and event_date is not None:
+            payload["start"] = {"date": event_date.isoformat()}
+            payload["end"] = {"date": (event_date + timedelta(days=1)).isoformat()}
+        elif start_at is not None:
+            tz_name = timezone_name or settings.default_timezone
+            tz = ZoneInfo(tz_name)
+            start_aware = start_at.replace(tzinfo=timezone.utc) if start_at.tzinfo is None else start_at
+            if end_at is None:
+                end_at = (start_aware.astimezone(timezone.utc).replace(tzinfo=None) + timedelta(hours=1))
+            end_aware = end_at.replace(tzinfo=timezone.utc) if end_at.tzinfo is None else end_at
+            payload["start"] = {
+                "dateTime": start_aware.astimezone(tz).isoformat(),
+                "timeZone": tz_name,
+            }
+            payload["end"] = {
+                "dateTime": end_aware.astimezone(tz).isoformat(),
+                "timeZone": tz_name,
+            }
         self._authorized_request("PATCH", url, payload)
         return google_event_id

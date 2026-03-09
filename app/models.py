@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -90,7 +90,13 @@ class EventSuggestion(Base):
     title: Mapped[str] = mapped_column(String(255), default="Meeting")
     start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    event_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    is_all_day: Mapped[bool] = mapped_column(Boolean, default=False, nullable=True)
+    timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    reason_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_message_ids_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    context_window_size: Mapped[int] = mapped_column(Integer, default=0, nullable=True)
     status: Mapped[SuggestionStatus] = mapped_column(Enum(SuggestionStatus), default=SuggestionStatus.pending_approval)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

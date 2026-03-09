@@ -6,6 +6,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Qu
 from sqlalchemy.orm import Session
 
 from app.db import Base, SessionLocal, engine, get_session
+from app.db_migrations import run_startup_migrations
 from app.models import AuditLog
 from app.schemas import (
     GoogleOAuthCallbackRequest,
@@ -82,6 +83,7 @@ def _process_slack_action(parsed_action: SlackParsedAction) -> None:
 @app.on_event("startup")
 def on_startup() -> None:
     Base.metadata.create_all(bind=engine)
+    run_startup_migrations(engine)
     start_scheduler()
 
 

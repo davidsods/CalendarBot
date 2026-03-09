@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 from sqlalchemy import select
@@ -40,6 +40,9 @@ def _suggestion(
         action=action,
         target_event_ref=target_event_ref,
         title="Original",
+        event_date=date(2026, 3, 10),
+        is_all_day=True,
+        timezone="America/Los_Angeles",
         confidence=0.9,
     )
     session.add(suggestion)
@@ -67,8 +70,10 @@ def test_edit_then_approve_create_creates_calendar_link(
 ) -> None:
     suggestion = _suggestion(db_session, action="create", thread_id="thread-create")
 
-    def _create_event(self: GoogleCalendarClient, title: str) -> str:
+    def _create_event(self: GoogleCalendarClient, title: str, **kwargs: object) -> str:
         assert title == "Renamed"
+        assert kwargs["event_date"] == date(2026, 3, 10)
+        assert kwargs["is_all_day"] is True
         return "evt-123"
 
     monkeypatch.setattr(GoogleCalendarClient, "create_event", _create_event)
@@ -93,11 +98,12 @@ def test_edit_then_approve_update_calls_google_update(
         thread_id="thread-update",
         target_event_ref="existing-evt",
     )
-    called: dict[str, str] = {}
+    called: dict[str, object] = {}
 
-    def _update_event(self: GoogleCalendarClient, google_event_id: str, title: str) -> str:
+    def _update_event(self: GoogleCalendarClient, google_event_id: str, title: str, **kwargs: object) -> str:
         called["google_event_id"] = google_event_id
         called["title"] = title
+        called["is_all_day"] = kwargs["is_all_day"]
         return google_event_id
 
     monkeypatch.setattr(GoogleCalendarClient, "update_event", _update_event)
@@ -106,7 +112,7 @@ def test_edit_then_approve_update_calls_google_update(
 
     assert status == "approved"
     assert suggestion.status == SuggestionStatus.approved
-    assert called == {"google_event_id": "existing-evt", "title": "Moved"}
+    assert called == {"google_event_id": "existing-evt", "title": "Moved", "is_all_day": True}
 
 
 def test_mismatched_approve_action_is_invalid_for_create(

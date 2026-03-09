@@ -183,9 +183,21 @@ def test_create_event_falls_back_when_api_returns_no_id(
 
     monkeypatch.setattr(GoogleCalendarClient, "_authorized_request", _fake_authorized_request)
 
-    event_id = GoogleCalendarClient(db_session).create_event("Planning Call")
+    event_id = GoogleCalendarClient(db_session).create_event(
+        "Planning Call",
+        start_at=datetime(2026, 3, 13, 0, 30),
+        end_at=datetime(2026, 3, 13, 1, 30),
+        timezone_name="America/Los_Angeles",
+    )
 
     assert event_id.startswith("gcal_planning_call_")
+
+
+def test_create_event_requires_schedule_when_missing(
+    db_session: Session,
+) -> None:
+    with pytest.raises(RuntimeError, match="missing_schedule"):
+        GoogleCalendarClient(db_session).create_event("Planning Call")
 
 
 def test_update_event_returns_id_and_uses_patch(

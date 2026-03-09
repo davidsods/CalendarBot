@@ -6,6 +6,7 @@ import json
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+import pytest
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -130,7 +131,7 @@ def test_slack_notifier_sends_calendar_preview(monkeypatch) -> None:
         assert "Source message" in blocks_json
         assert "thread-123" in blocks_json
         assert "evt_abc123" in blocks_json
-        assert "default 1-hour hold" in blocks_json
+        assert "Not extracted" in blocks_json
     finally:
         settings.slack_enabled = orig_enabled
         settings.slack_bot_token = orig_token
@@ -141,8 +142,23 @@ def test_google_calendar_client_fallback_without_oauth_token() -> None:
     session = _session()
     client = GoogleCalendarClient(session)
 
-    event_id = client.create_event("Planning Call")
+    start_at = datetime(2026, 3, 12, 23, 0)  # 3pm PST in UTC
+    end_at = datetime(2026, 3, 13, 0, 0)
+    event_id = client.create_event(
+        "Planning Call",
+        start_at=start_at,
+        end_at=end_at,
+        timezone_name="America/Los_Angeles",
+    )
     assert event_id.startswith("gcal_planning_call_")
+
+
+def test_google_calendar_client_requires_schedule() -> None:
+    session = _session()
+    client = GoogleCalendarClient(session)
+
+    with pytest.raises(RuntimeError, match="missing_schedule"):
+        client.create_event("Planning Call")
 
 
 def test_google_calendar_client_handles_aware_expiry_without_type_error() -> None:

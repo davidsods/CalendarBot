@@ -42,7 +42,16 @@ class ApprovalService:
             suggestion.title = edited_title
 
         if normalized_action == "approve_create" and suggestion.action == "create":
-            google_event_id = self.google.create_event(suggestion.title)
+            if suggestion.start_at is None and not suggestion.is_all_day:
+                return "missing_schedule"
+            google_event_id = self.google.create_event(
+                suggestion.title,
+                start_at=suggestion.start_at,
+                end_at=suggestion.end_at,
+                event_date=suggestion.event_date,
+                is_all_day=bool(suggestion.is_all_day),
+                timezone_name=suggestion.timezone,
+            )
             link = self.session.query(CalendarLink).filter(CalendarLink.thread_id == suggestion.thread_id).one_or_none()
             if link:
                 link.google_event_id = google_event_id
@@ -51,7 +60,17 @@ class ApprovalService:
 
         if normalized_action == "approve_update" and suggestion.action == "update":
             if suggestion.target_event_ref:
-                self.google.update_event(suggestion.target_event_ref, suggestion.title)
+                if suggestion.start_at is None and not suggestion.is_all_day:
+                    return "missing_schedule"
+                self.google.update_event(
+                    suggestion.target_event_ref,
+                    suggestion.title,
+                    start_at=suggestion.start_at,
+                    end_at=suggestion.end_at,
+                    event_date=suggestion.event_date,
+                    is_all_day=bool(suggestion.is_all_day),
+                    timezone_name=suggestion.timezone,
+                )
 
         suggestion.status = SuggestionStatus.approved
         self.session.flush()
