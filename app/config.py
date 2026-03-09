@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     raw_retention_hours: int = Field(default=24, alias="RAW_RETENTION_HOURS")
     default_timezone: str = Field(default="America/Los_Angeles", alias="DEFAULT_TIMEZONE")
     thread_context_window_messages: int = Field(default=30, alias="THREAD_CONTEXT_WINDOW_MESSAGES")
+    thread_anchor_window_messages: int = Field(default=20, alias="THREAD_ANCHOR_WINDOW_MESSAGES")
+    thread_slot_snapshot_limit: int = Field(default=5, alias="THREAD_SLOT_SNAPSHOT_LIMIT")
+    llama_context_version: str = Field(default="v1", alias="LLAMA_CONTEXT_VERSION")
 
     llama_extract_url: str | None = Field(default=None, alias="LLAMA_EXTRACT_URL")
     llama_api_key: str | None = Field(default=None, alias="LLAMA_API_KEY")

@@ -100,6 +100,8 @@ class EventSuggestion(Base):
     thread_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
     confidence_tier: Mapped[str | None] = mapped_column(String(20), nullable=True)
     slot_candidate_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    decision_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    context_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[SuggestionStatus] = mapped_column(Enum(SuggestionStatus), default=SuggestionStatus.pending_approval)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -125,6 +127,8 @@ class ThreadPlanningState(Base):
     recommended_slot_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     decision_confidence: Mapped[float] = mapped_column(Float, default=0.0)
     decision_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    context_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

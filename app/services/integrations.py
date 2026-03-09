@@ -96,6 +96,9 @@ class SlackNotifier:
         thread_summary: str | None = None,
         evidence_messages: list[dict[str, object]] | None = None,
         confidence_tier: str | None = None,
+        decision_rationale: str | None = None,
+        conflict_note: str | None = None,
+        decision_source: str | None = None,
     ) -> None:
         if not settings.slack_enabled or not settings.slack_bot_token or not settings.slack_channel_id:
             return
@@ -127,6 +130,8 @@ class SlackNotifier:
             fields.append({"type": "mrkdwn", "text": f"*Confidence:*\n{confidence:.2f}"})
         if confidence_tier:
             fields.append({"type": "mrkdwn", "text": f"*Confidence tier:*\n`{self._escape_mrkdwn(confidence_tier)}`"})
+        if decision_source:
+            fields.append({"type": "mrkdwn", "text": f"*Decision source:*\n`{self._escape_mrkdwn(decision_source)}`"})
         if sent_at is not None:
             fields.append({"type": "mrkdwn", "text": f"*Message sent:*\n{self._format_utc(sent_at)}"})
         if timezone_name:
@@ -152,6 +157,26 @@ class SlackNotifier:
                     "text": {
                         "type": "mrkdwn",
                         "text": f"*Thread summary:*\n{self._escape_mrkdwn(thread_summary)}",
+                    },
+                }
+            )
+        if decision_rationale:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Why now:*\n{self._escape_mrkdwn(decision_rationale)}",
+                    },
+                }
+            )
+        if conflict_note:
+            blocks.append(
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*Conflict note:*\n{self._escape_mrkdwn(conflict_note)}",
                     },
                 }
             )

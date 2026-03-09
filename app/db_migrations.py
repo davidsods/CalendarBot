@@ -29,10 +29,20 @@ def run_startup_migrations(engine: Engine) -> None:
         ddl.append("ALTER TABLE event_suggestions ADD COLUMN confidence_tier VARCHAR(20)")
     if "slot_candidate_id" not in existing_cols:
         ddl.append("ALTER TABLE event_suggestions ADD COLUMN slot_candidate_id INTEGER")
+    if "decision_source" not in existing_cols:
+        ddl.append("ALTER TABLE event_suggestions ADD COLUMN decision_source VARCHAR(20)")
+    if "context_version" not in existing_cols:
+        ddl.append("ALTER TABLE event_suggestions ADD COLUMN context_version VARCHAR(20)")
 
     with engine.begin() as conn:
         for statement in ddl:
             conn.execute(text(statement))
+
+        planning_cols = {col["name"] for col in insp.get_columns("thread_planning_states")} if "thread_planning_states" in table_names else set()
+        if "thread_planning_states" in table_names and "decision_source" not in planning_cols:
+            conn.execute(text("ALTER TABLE thread_planning_states ADD COLUMN decision_source VARCHAR(20)"))
+        if "thread_planning_states" in table_names and "context_version" not in planning_cols:
+            conn.execute(text("ALTER TABLE thread_planning_states ADD COLUMN context_version VARCHAR(20)"))
 
         if "thread_planning_states" not in table_names:
             conn.execute(
