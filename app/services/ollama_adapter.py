@@ -9,6 +9,59 @@ from datetime import date, datetime
 from app.config import settings
 
 _VALID_ACTIONS = {"create", "update", "ignore"}
+_THREAD_DECISION_FORMAT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "should_generate": {"type": "boolean"},
+        "thread_state": {"type": "string"},
+        "confidence_tier": {"type": "string"},
+        "decision_confidence": {"type": "number"},
+        "action": {"type": "string"},
+        "title": {"type": "string"},
+        "event_date": {"type": ["string", "null"]},
+        "start_at": {"type": ["string", "null"]},
+        "end_at": {"type": ["string", "null"]},
+        "is_all_day": {"type": "boolean"},
+        "timezone": {"type": "string"},
+        "recommended_slot_key": {"type": ["string", "null"]},
+        "slot_candidates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "slot_key": {"type": "string"},
+                    "event_date": {"type": ["string", "null"]},
+                    "start_at": {"type": ["string", "null"]},
+                    "end_at": {"type": ["string", "null"]},
+                    "is_all_day": {"type": "boolean"},
+                    "timezone": {"type": "string"},
+                    "title": {"type": "string"},
+                    "supporting_message_ids": {"type": "array", "items": {"type": ["integer", "string"]}},
+                    "contradicting_message_ids": {"type": "array", "items": {"type": ["integer", "string"]}},
+                    "score": {"type": ["number", "string"]},
+                    "recency_score": {"type": ["number", "string"]},
+                },
+                "required": ["slot_key", "timezone"],
+            },
+        },
+        "decision_rationale": {"type": "string"},
+        "slack_summary": {"type": ["string", "null"]},
+        "conflict_note": {"type": ["string", "null"]},
+        "evidence_message_ids": {"type": "array", "items": {"type": ["integer", "string"]}},
+    },
+    "required": [
+        "should_generate",
+        "thread_state",
+        "confidence_tier",
+        "decision_confidence",
+        "action",
+        "title",
+        "timezone",
+        "slot_candidates",
+        "decision_rationale",
+        "evidence_message_ids",
+    ],
+}
 
 
 class OllamaExtractorClient:
@@ -105,11 +158,19 @@ class OllamaExtractorClient:
         payload = {
             "model": self.model,
             "stream": False,
-            "format": "json",
+            "format": _THREAD_DECISION_FORMAT_SCHEMA,
             "options": {"temperature": 0, "num_predict": 160},
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(context, default=_json_default)},
+                {
+                    "role": "user",
+                    "content": (
+                        "Context JSON (do not repeat this object):\n"
+                        f"{json.dumps(context, default=_json_default)}\n\n"
+                        "Return only the decision JSON matching the requested schema. "
+                        "Do not include context keys like thread_messages_recent, thread_id, context_ready, or now_utc."
+                    ),
+                },
             ],
         }
 
