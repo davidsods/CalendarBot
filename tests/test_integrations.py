@@ -138,6 +138,58 @@ def test_slack_notifier_sends_calendar_preview(monkeypatch) -> None:
         settings.slack_channel_id = orig_channel
 
 
+def test_slack_notifier_chunks_fields_to_avoid_invalid_blocks(monkeypatch) -> None:
+    orig_enabled = settings.slack_enabled
+    orig_token = settings.slack_bot_token
+    orig_channel = settings.slack_channel_id
+    try:
+        settings.slack_enabled = True
+        settings.slack_bot_token = "xoxb-test"
+        settings.slack_channel_id = "C123"
+
+        captured: dict[str, object] = {}
+
+        def _fake_urlopen(req: urllib.request.Request, timeout: int):  # type: ignore[no-untyped-def]
+            captured["payload"] = json.loads(req.data.decode("utf-8"))  # type: ignore[union-attr]
+            return _FakeHTTPResponse({"ok": True})
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+        SlackNotifier().send_suggestion(
+            suggestion_id=99,
+            action="create",
+            title="A" * 300,
+            thread_id="thread-xyz",
+            source_text="S" * 400,
+            sent_at=datetime(2026, 3, 4, 18, 30, tzinfo=timezone.utc),
+            event_date=datetime(2026, 3, 5, 0, 0, tzinfo=timezone.utc).date(),
+            timezone_name="America/Los_Angeles",
+            target_event_ref="evt_123",
+            confidence=0.99,
+            confidence_tier="likely",
+            thread_summary="T" * 5000,
+            decision_rationale="R" * 5000,
+            conflict_note="C" * 5000,
+            decision_source="fallback",
+            evidence_messages=[
+                {"sender_role": "self", "text": "a"},
+                {"sender_role": "other", "text": "b"},
+            ],
+        )
+
+        payload = captured["payload"]
+        assert isinstance(payload, dict)
+        blocks = payload["blocks"]  # type: ignore[index]
+        field_sections = [b for b in blocks if b.get("type") == "section" and "fields" in b]
+        assert field_sections
+        for section in field_sections:
+            assert len(section["fields"]) <= 10
+    finally:
+        settings.slack_enabled = orig_enabled
+        settings.slack_bot_token = orig_token
+        settings.slack_channel_id = orig_channel
+
+
 def test_google_calendar_client_fallback_without_oauth_token() -> None:
     session = _session()
     client = GoogleCalendarClient(session)

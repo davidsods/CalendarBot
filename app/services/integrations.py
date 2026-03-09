@@ -40,6 +40,10 @@ class SlackNotifier:
         return value[: limit - 3].rstrip() + "..."
 
     @staticmethod
+    def _chunk_fields(fields: list[dict[str, str]], size: int = 10) -> list[list[dict[str, str]]]:
+        return [fields[i : i + size] for i in range(0, len(fields), size)]
+
+    @staticmethod
     def _format_utc(value: datetime | None) -> str:
         if value is None:
             return "Not extracted"
@@ -119,7 +123,7 @@ class SlackNotifier:
         fields: list[dict[str, str]] = [
             {"type": "mrkdwn", "text": f"*Suggestion ID:*\n#{suggestion_id}"},
             {"type": "mrkdwn", "text": f"*Action:*\n`{action_label}`"},
-            {"type": "mrkdwn", "text": f"*Proposed title:*\n{safe_title}"},
+            {"type": "mrkdwn", "text": self._truncate(f"*Proposed title:*\n{safe_title}", limit=1800)},
             {"type": "mrkdwn", "text": f"*Proposed time:*\n{time_preview}"},
         ]
         if thread_id:
@@ -148,15 +152,19 @@ class SlackNotifier:
                     "text": "*Calendar suggestion ready for approval*",
                 },
             },
-            {"type": "section", "fields": fields},
         ]
+        for group in self._chunk_fields(fields, size=10):
+            blocks.append({"type": "section", "fields": group})
         if thread_summary:
             blocks.append(
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*Thread summary:*\n{self._escape_mrkdwn(thread_summary)}",
+                        "text": self._truncate(
+                            f"*Thread summary:*\n{self._escape_mrkdwn(thread_summary)}",
+                            limit=2800,
+                        ),
                     },
                 }
             )
@@ -166,7 +174,10 @@ class SlackNotifier:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*Why now:*\n{self._escape_mrkdwn(decision_rationale)}",
+                        "text": self._truncate(
+                            f"*Why now:*\n{self._escape_mrkdwn(decision_rationale)}",
+                            limit=2800,
+                        ),
                     },
                 }
             )
@@ -176,7 +187,10 @@ class SlackNotifier:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*Conflict note:*\n{self._escape_mrkdwn(conflict_note)}",
+                        "text": self._truncate(
+                            f"*Conflict note:*\n{self._escape_mrkdwn(conflict_note)}",
+                            limit=2800,
+                        ),
                     },
                 }
             )
