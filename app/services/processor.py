@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
+from zoneinfo import ZoneInfo
 from sqlalchemy import asc, select
 from sqlalchemy.orm import Session
 
@@ -30,6 +32,7 @@ class RunResult:
     processed: int
     deferred: int
     stopped_for_budget: bool
+    skipped_for_window: bool = False
 
 
 class ProcessorService:
@@ -38,6 +41,24 @@ class ProcessorService:
         self.budget = BudgetService(session)
         self.extractor = LlamaExtractor()
         self.slack = SlackNotifier()
+
+    def _log_event(self, event_type: str, payload: dict[str, object]) -> None:
+        self.session.add(
+            AuditLog(
+                event_type=event_type,
+                payload=json.dumps(payload),
+            )
+        )
+
+    def _is_within_processing_window(self, now_utc: datetime | None = None) -> bool:
+        start_hour = max(0, min(23, int(settings.processor_active_start_hour)))
+        end_hour = max(1, min(24, int(settings.processor_active_end_hour)))
+        if start_hour >= end_hour:
+            return True
+        now = now_utc or datetime.now(ZoneInfo("UTC"))
+        aware_utc = now if now.tzinfo else now.replace(tzinfo=ZoneInfo("UTC"))
+        local_now = aware_utc.astimezone(ZoneInfo(settings.processor_tz))
+        return start_hour <= local_now.hour < end_hour
 
     def _checkpoint(self) -> ProcessingCheckpoint:
         checkpoint = self.session.get(ProcessingCheckpoint, 1)
@@ -57,6 +78,29 @@ class ProcessorService:
             .limit(1)
         )
         return self.session.scalar(stmt)
+
+    def _thread_pending_items_in_window(self, seed: QueueItem) -> list[QueueItem]:
+        seed_msg = self.session.get(MessageRecord, seed.message_id)
+        if not seed_msg:
+            return [seed]
+        window_minutes = max(0, int(settings.thread_coalesce_window_minutes))
+        if window_minutes <= 0:
+            return [seed]
+
+        window_end = seed_msg.sent_at + timedelta(minutes=window_minutes)
+        stmt = (
+            select(QueueItem)
+            .join(MessageRecord, QueueItem.message_id == MessageRecord.id)
+            .where(
+                QueueItem.status == QueueStatus.pending,
+                MessageRecord.thread_id == seed_msg.thread_id,
+                MessageRecord.sent_at >= seed_msg.sent_at,
+                MessageRecord.sent_at <= window_end,
+            )
+            .order_by(asc(MessageRecord.sent_at), asc(QueueItem.id))
+        )
+        rows = self.session.scalars(stmt).all()
+        return rows or [seed]
 
     def _load_thread_messages(self, thread_id: str, upto: datetime) -> list[dict[str, object]]:
         stmt = (
@@ -308,6 +352,18 @@ class ProcessorService:
         self.session.flush()
         return suggestion, is_new
 
+    def _latest_message_is_meta(self, thread_messages: list[dict[str, object]]) -> bool:
+        if not thread_messages:
+            return True
+        latest = thread_messages[-1]
+        text = str(latest.get("text", "") or "")
+        sent_at = latest.get("sent_at")
+        if not isinstance(sent_at, datetime):
+            sent_at = datetime.now(ZoneInfo("UTC"))
+        schedule = parse_schedule(text, sent_at, settings.default_timezone)
+        signal = classify_signal(text, schedule)
+        return signal.signal_type == "meta"
+
     def _process_one(self, item: QueueItem) -> None:
         item.status = QueueStatus.processing
         item.attempts += 1
@@ -317,8 +373,27 @@ class ProcessorService:
         assert msg is not None
 
         existing_link = self.session.scalar(select(CalendarLink).where(CalendarLink.thread_id == msg.thread_id))
+        existing_pending = self.session.scalar(
+            select(EventSuggestion).where(
+                EventSuggestion.thread_id == msg.thread_id,
+                EventSuggestion.status == SuggestionStatus.pending_approval,
+            )
+        )
 
         thread_messages = self._load_thread_messages(msg.thread_id, msg.sent_at)
+        if existing_pending is not None and self._latest_message_is_meta(thread_messages):
+            item.status = QueueStatus.completed
+            self._log_event(
+                "llama_gate_skipped",
+                {
+                    "reason": "pending_suggestion_meta_message",
+                    "thread_id": msg.thread_id,
+                    "message_id": msg.id,
+                },
+            )
+            self.session.flush()
+            return
+
         existing_slots = self._load_existing_slots(msg.thread_id)
         llama_context = self.build_llama_thread_context(
             thread_id=msg.thread_id,
@@ -334,6 +409,25 @@ class ProcessorService:
             existing_slots=existing_slots,
             llama_context=llama_context,
         )
+        if candidate.model_invoked:
+            self._log_event(
+                "llama_invoked",
+                {
+                    "thread_id": msg.thread_id,
+                    "message_id": msg.id,
+                    "thread_state": candidate.thread_state,
+                },
+            )
+        else:
+            self._log_event(
+                "llama_gate_skipped",
+                {
+                    "reason": "heuristic_gate",
+                    "thread_id": msg.thread_id,
+                    "message_id": msg.id,
+                    "thread_state": candidate.thread_state,
+                },
+            )
         slot_candidate_id = self._persist_thread_decision(msg.thread_id, candidate)
 
         if candidate.fallback_reason:
@@ -417,9 +511,30 @@ class ProcessorService:
 
         item.status = QueueStatus.completed
         self.budget.record_usage(settings.estimated_llama_cost_per_message_usd)
+        self._log_event(
+            "thread_processed",
+            {
+                "thread_id": msg.thread_id,
+                "message_id": msg.id,
+                "model_invoked": candidate.model_invoked,
+                "estimated_cost_usd": settings.estimated_llama_cost_per_message_usd if candidate.model_invoked else 0.0,
+            },
+        )
         self.session.flush()
 
-    def run_once(self) -> RunResult:
+    def run_once(self, now_utc: datetime | None = None) -> RunResult:
+        if not self._is_within_processing_window(now_utc=now_utc):
+            self._log_event(
+                "processor_window_skip",
+                {
+                    "processor_tz": settings.processor_tz,
+                    "start_hour": settings.processor_active_start_hour,
+                    "end_hour": settings.processor_active_end_hour,
+                },
+            )
+            self.session.flush()
+            return RunResult(processed=0, deferred=0, stopped_for_budget=False, skipped_for_window=True)
+
         self.budget.refresh_month_and_requeue_if_needed()
         checkpoint = self._checkpoint()
 
@@ -437,12 +552,40 @@ class ProcessorService:
             decision = self.budget.can_claim_next_unit(settings.estimated_llama_cost_per_message_usd)
             if not decision.allowed:
                 deferred = self.budget.enforce_cap()
+                self._log_event(
+                    "budget_cap_enforced",
+                    {
+                        "deferred": deferred,
+                        "cap_usd": settings.monthly_budget_cap_usd,
+                    },
+                )
                 stopped_for_budget = True
                 self.session.flush()
-                return RunResult(processed=processed, deferred=deferred, stopped_for_budget=stopped_for_budget)
+                return RunResult(
+                    processed=processed,
+                    deferred=deferred,
+                    stopped_for_budget=stopped_for_budget,
+                    skipped_for_window=False,
+                )
 
-            self._process_one(next_item)
-            msg = self.session.get(MessageRecord, next_item.message_id)
+            coalesced_items = self._thread_pending_items_in_window(next_item)
+            process_item = coalesced_items[-1]
+            skipped_items = coalesced_items[:-1]
+            for skipped in skipped_items:
+                skipped.status = QueueStatus.completed
+                skipped.deferred_reason = "coalesced_thread_window"
+            if skipped_items:
+                process_msg = self.session.get(MessageRecord, process_item.message_id)
+                self._log_event(
+                    "thread_coalesced",
+                    {
+                        "thread_id": process_msg.thread_id if process_msg else "",
+                        "skipped_messages": len(skipped_items),
+                    },
+                )
+
+            self._process_one(process_item)
+            msg = self.session.get(MessageRecord, process_item.message_id)
             if msg and (latest_processed_sent_at is None or msg.sent_at > latest_processed_sent_at):
                 latest_processed_sent_at = msg.sent_at
             processed += 1

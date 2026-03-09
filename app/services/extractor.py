@@ -40,6 +40,7 @@ class ExtractedCandidate:
     decision_source: str = "fallback"
     context_version: str = "v1"
     fallback_reason: str | None = None
+    model_invoked: bool = False
 
 
 class LlamaExtractor:
@@ -63,6 +64,7 @@ class LlamaExtractor:
                         confidence=float(result["confidence"]),
                         decision_source="llama",
                         context_version=settings.llama_context_version,
+                        model_invoked=True,
                     )
                 except Exception:
                     return self._heuristic(text, has_existing_thread_event)
@@ -102,6 +104,7 @@ class LlamaExtractor:
                     confidence=confidence,
                     decision_source="llama",
                     context_version=settings.llama_context_version,
+                    model_invoked=True,
                 )
         except Exception:
             return self._heuristic(text, has_existing_thread_event)
@@ -192,6 +195,7 @@ class LlamaExtractor:
             decision_source="fallback",
             context_version=settings.llama_context_version,
             fallback_reason=fallback_reason,
+            model_invoked=llm_action_candidate.model_invoked,
         )
 
     def _try_llama_thread_decision(
@@ -267,6 +271,7 @@ class LlamaExtractor:
             slack_summary=parsed.slack_summary or parsed.decision_rationale,
             decision_source="llama",
             context_version=str(llama_context.get("context_version") or settings.llama_context_version),
+            model_invoked=True,
         )
 
     def _normalize_thread_decision_payload(

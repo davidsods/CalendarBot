@@ -5,10 +5,13 @@ import json
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import Base, SessionLocal, engine, get_session
 from app.db_migrations import run_startup_migrations
 from app.models import AuditLog
 from app.schemas import (
+    CostSummaryResponse,
+    DailyCostPoint,
     GoogleOAuthCallbackRequest,
     GoogleOAuthStatusResponse,
     IngestRequest,
@@ -21,6 +24,7 @@ from app.schemas import (
 from app.scheduler import start_scheduler, stop_scheduler
 from app.services.approvals import ApprovalService
 from app.services.budget import BudgetService
+from app.services.costs import CostSummaryService
 from app.services.extraction_utils import heuristic_extract
 from app.services.ingest import IngestService
 from app.services.integrations import GoogleOAuthService, SlackActionParser, SlackNotifier, SlackParsedAction
@@ -84,12 +88,14 @@ def _process_slack_action(parsed_action: SlackParsedAction) -> None:
 def on_startup() -> None:
     Base.metadata.create_all(bind=engine)
     run_startup_migrations(engine)
-    start_scheduler()
+    if settings.processor_mode == "inprocess":
+        start_scheduler()
 
 
 @app.on_event("shutdown")
 def on_shutdown() -> None:
-    stop_scheduler()
+    if settings.processor_mode == "inprocess":
+        stop_scheduler()
 
 
 @app.get("/health")
@@ -114,6 +120,37 @@ def run_processor(session: Session = Depends(get_session)) -> ProcessorRunResult
         processed=result.processed,
         deferred=result.deferred,
         stopped_for_budget=result.stopped_for_budget,
+        skipped_for_window=result.skipped_for_window,
+    )
+
+
+@app.get("/v1/costs/summary", response_model=CostSummaryResponse)
+def costs_summary(
+    lookback_days: int = Query(default=30, ge=1, le=90),
+    session: Session = Depends(get_session),
+) -> CostSummaryResponse:
+    points, totals = CostSummaryService(session).summarize(lookback_days=lookback_days)
+    return CostSummaryResponse(
+        lookback_days=lookback_days,
+        points=[
+            DailyCostPoint(
+                day=p.day,
+                processed_threads=p.processed_threads,
+                model_invocations=p.model_invocations,
+                gated_skips=p.gated_skips,
+                deferred_by_budget=p.deferred_by_budget,
+                estimated_model_spend_usd=p.estimated_model_spend_usd,
+            )
+            for p in points
+        ],
+        totals=DailyCostPoint(
+            day=totals.day,
+            processed_threads=totals.processed_threads,
+            model_invocations=totals.model_invocations,
+            gated_skips=totals.gated_skips,
+            deferred_by_budget=totals.deferred_by_budget,
+            estimated_model_spend_usd=totals.estimated_model_spend_usd,
+        ),
     )
 
 

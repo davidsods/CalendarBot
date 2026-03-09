@@ -11,6 +11,10 @@ Low-cost backend scaffold for iMessage -> Slack approval -> Google Calendar even
   - Configurable interval via `PROCESSOR_INTERVAL_HOURS` (default `3`).
   - Processes all pending queue items until drained.
   - No fixed run timeout.
+  - Optional runtime mode split:
+    - `PROCESSOR_MODE=inprocess` keeps APScheduler in the API process.
+    - `PROCESSOR_MODE=worker` disables in-process scheduling; use external cron/worker triggers.
+  - Daytime execution guard via `PROCESSOR_TZ`, `PROCESSOR_ACTIVE_START_HOUR`, `PROCESSOR_ACTIVE_END_HOUR`.
 - Budget guardrail
   - Uses monthly estimated spend with cap (`MONTHLY_BUDGET_CAP_USD`, default `15`).
   - Safety buffer (`BUDGET_SAFETY_BUFFER_USD`, default `1`).
@@ -31,6 +35,8 @@ Low-cost backend scaffold for iMessage -> Slack approval -> Google Calendar even
   - Calendar writes use stored OAuth tokens (with refresh flow).
 - Retention
   - `POST /v1/maintenance/purge-raw` purges message records older than `RAW_RETENTION_HOURS` (default `24`).
+- Cost visibility
+  - `GET /v1/costs/summary` returns 30-day operational cost telemetry.
 - macOS relay agent
   - `relay/mac_relay.py` polls `~/Library/Messages/chat.db` and sends incremental batches.
   - Uses local checkpoint file to process only new messages.
@@ -56,10 +62,15 @@ python relay/mac_relay.py
 - `DATABASE_URL` (default `sqlite:///./scheduler.db`)
 - `PROCESSOR_INTERVAL_HOURS` (default `3`)
 - `PROCESSOR_INTERVAL_SECONDS` (optional override for rapid testing; when set, it takes precedence)
+- `PROCESSOR_MODE` (`inprocess` or `worker`)
+- `PROCESSOR_TZ` (default `America/Los_Angeles`)
+- `PROCESSOR_ACTIVE_START_HOUR` / `PROCESSOR_ACTIVE_END_HOUR` (active hour window; end is exclusive)
 - `MONTHLY_BUDGET_CAP_USD` (default `15`)
 - `BUDGET_SAFETY_BUFFER_USD` (default `1`)
 - `ESTIMATED_LLAMA_COST_PER_MESSAGE_USD` (default `0.02`)
 - `RAW_RETENTION_HOURS` (default `24`)
+- `THREAD_COALESCE_WINDOW_MINUTES` (default `60`)
+- `LLAMA_GATE_MODE` (`aggressive`, `balanced`, `quality`)
 - `LLAMA_EXTRACT_URL`, `LLAMA_API_KEY`, `LLAMA_TIMEOUT_SECONDS`
 - `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `OLLAMA_API_KEY`, `OLLAMA_TIMEOUT_SECONDS`
 - `SLACK_ENABLED`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `SLACK_CHANNEL_ID`
@@ -90,6 +101,27 @@ LLAMA_API_KEY=
 ```
 
 Optional: if you need a public adapter endpoint, set `LLAMA_EXTRACT_URL` to your Scheduler URL + `/v1/llama/extract`.
+
+## Worker mode on Railway
+
+To keep API and processing separated:
+
+1. Set API service variables:
+
+```bash
+PROCESSOR_MODE=worker
+PROCESSOR_TZ=America/Los_Angeles
+PROCESSOR_ACTIVE_START_HOUR=6
+PROCESSOR_ACTIVE_END_HOUR=24
+```
+
+2. Create a worker/cron trigger that runs hourly:
+
+```bash
+python -m app.worker
+```
+
+The processor will no-op outside the configured active hours.
 
 ## Tests
 
