@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 from zoneinfo import ZoneInfo
 from sqlalchemy import asc, select
@@ -120,6 +121,101 @@ class ProcessorService:
             for m in rows
         ]
 
+    def _load_all_thread_messages(self, thread_id: str, upto: datetime) -> list[MessageRecord]:
+        stmt = (
+            select(MessageRecord)
+            .where(MessageRecord.thread_id == thread_id, MessageRecord.sent_at <= upto)
+            .order_by(asc(MessageRecord.sent_at), asc(MessageRecord.id))
+        )
+        return self.session.scalars(stmt).all()
+
+    def build_llama_thread_context(
+        self,
+        thread_id: str,
+        upto_message: MessageRecord,
+        has_existing_thread_event: bool,
+        target_event_ref: str | None,
+        existing_slots: list[SlotCandidate],
+    ) -> dict[str, object]:
+        all_rows = self._load_all_thread_messages(thread_id, upto_message.sent_at)
+        if not all_rows:
+            return {
+                "context_ready": False,
+                "fallback_reason": "no_thread_messages",
+                "context_version": settings.llama_context_version,
+            }
+
+        recent_n = max(settings.thread_context_window_messages, 1)
+        recent_rows = all_rows[-recent_n:]
+        older_rows = all_rows[:-recent_n]
+
+        def _row_to_payload(row: MessageRecord) -> dict[str, object]:
+            return {
+                "id": row.id,
+                "sender_role": row.sender_role,
+                "text": row.text,
+                "sent_at": row.sent_at,
+            }
+
+        anchor_messages: list[dict[str, object]] = []
+        for row in reversed(older_rows):
+            parsed = parse_schedule(row.text, row.sent_at, settings.default_timezone)
+            signal = classify_signal(row.text, parsed)
+            if signal.signal_type in {"proposal", "accept", "reject", "reschedule", "cancel"}:
+                anchor_messages.append(_row_to_payload(row))
+            if len(anchor_messages) >= max(settings.thread_anchor_window_messages, 1):
+                break
+        anchor_messages.reverse()
+
+        planning = self.session.scalar(select(ThreadPlanningState).where(ThreadPlanningState.thread_id == thread_id))
+        planning_state = {
+            "thread_state": planning.state if planning else "exploring",
+            "recommended_slot_key": planning.recommended_slot_key if planning else None,
+            "confidence_tier": None,
+            "decision_confidence": float(planning.decision_confidence) if planning else 0.0,
+            "decision_rationale": planning.decision_rationale if planning else None,
+            "decision_source": planning.decision_source if planning else None,
+        }
+
+        slot_snapshot = []
+        for slot in sorted(existing_slots, key=lambda s: (s.score + 0.2 * s.recency_score), reverse=True)[
+            : max(settings.thread_slot_snapshot_limit, 1)
+        ]:
+            slot_snapshot.append(
+                {
+                    "slot_key": slot.slot_key,
+                    "event_date": slot.event_date,
+                    "start_at": slot.start_at,
+                    "end_at": slot.end_at,
+                    "is_all_day": slot.is_all_day,
+                    "timezone": slot.timezone,
+                    "title": slot.title,
+                    "supporting_message_ids": slot.supporting_message_ids,
+                    "contradicting_message_ids": slot.contradicting_message_ids,
+                    "score": slot.score,
+                    "recency_score": slot.recency_score,
+                }
+            )
+
+        context = {
+            "context_ready": True,
+            "context_version": settings.llama_context_version,
+            "thread_id": thread_id,
+            "thread_messages_recent": [_row_to_payload(row) for row in recent_rows],
+            "thread_messages_anchor": anchor_messages,
+            "has_existing_thread_event": has_existing_thread_event,
+            "target_event_ref": target_event_ref,
+            "prior_planning_state": planning_state,
+            "slot_candidates_snapshot": slot_snapshot,
+            "default_timezone": settings.default_timezone,
+            "now_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        }
+        required_ok = bool(context["thread_messages_recent"]) and bool(context["default_timezone"])
+        if not required_ok:
+            context["context_ready"] = False
+            context["fallback_reason"] = "missing_required_context_fields"
+        return context
+
     def _load_existing_slots(self, thread_id: str) -> list[SlotCandidate]:
         stmt = (
             select(ThreadSlotCandidate)
@@ -170,6 +266,8 @@ class ProcessorService:
         planning.recommended_slot_key = candidate.recommended_slot_key
         planning.decision_confidence = candidate.confidence
         planning.decision_rationale = candidate.decision_rationale
+        planning.decision_source = candidate.decision_source
+        planning.context_version = candidate.context_version
 
         active_rows = self.session.scalars(
             select(ThreadSlotCandidate).where(
@@ -247,6 +345,8 @@ class ProcessorService:
         suggestion.thread_state = candidate.thread_state
         suggestion.confidence_tier = candidate.confidence_tier
         suggestion.slot_candidate_id = slot_candidate_id
+        suggestion.decision_source = candidate.decision_source
+        suggestion.context_version = candidate.context_version
         if existing_pending is None:
             self.session.add(suggestion)
         self.session.flush()
@@ -295,11 +395,19 @@ class ProcessorService:
             return
 
         existing_slots = self._load_existing_slots(msg.thread_id)
+        llama_context = self.build_llama_thread_context(
+            thread_id=msg.thread_id,
+            upto_message=msg,
+            has_existing_thread_event=bool(existing_link),
+            target_event_ref=existing_link.google_event_id if existing_link else None,
+            existing_slots=existing_slots,
+        )
         candidate = self.extractor.extract_thread(
             thread_messages,
             has_existing_thread_event=bool(existing_link),
             reference_utc=msg.sent_at,
             existing_slots=existing_slots,
+            llama_context=llama_context,
         )
         if candidate.model_invoked:
             self._log_event(
@@ -321,6 +429,21 @@ class ProcessorService:
                 },
             )
         slot_candidate_id = self._persist_thread_decision(msg.thread_id, candidate)
+
+        if candidate.fallback_reason:
+            self.session.add(
+                AuditLog(
+                    event_type="llama_fallback",
+                    payload=json.dumps(
+                        {
+                            "thread_id": msg.thread_id,
+                            "message_id": msg.id,
+                            "reason": candidate.fallback_reason,
+                            "context_version": candidate.context_version,
+                        }
+                    ),
+                )
+            )
 
         if candidate.action == "ignore" or not candidate.should_generate:
             item.status = QueueStatus.completed
@@ -368,6 +491,9 @@ class ProcessorService:
                     thread_summary=suggestion.reason_summary,
                     evidence_messages=evidence_msgs,
                     confidence_tier=suggestion.confidence_tier,
+                    decision_rationale=suggestion.reason_summary,
+                    conflict_note=candidate.conflict_note,
+                    decision_source=suggestion.decision_source,
                 )
             except Exception as exc:
                 self.session.add(

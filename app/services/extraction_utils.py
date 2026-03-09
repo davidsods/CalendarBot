@@ -189,9 +189,19 @@ def parse_schedule(
         lowered,
     )
     if range_match:
-        start_local_time = _parse_clock(range_match.group(1), range_match.group(2), range_match.group(3))
-        end_meridiem = range_match.group(6) or range_match.group(3)
-        end_local_time = _parse_clock(range_match.group(4), range_match.group(5), end_meridiem)
+        try:
+            start_local_time = _parse_clock(range_match.group(1), range_match.group(2), range_match.group(3))
+            end_meridiem = range_match.group(6) or range_match.group(3)
+            end_local_time = _parse_clock(range_match.group(4), range_match.group(5), end_meridiem)
+        except ValueError:
+            return ParsedSchedule(
+                event_date=parsed_date,
+                start_at_utc=None,
+                end_at_utc=None,
+                is_all_day=True,
+                timezone=timezone_name,
+                has_explicit_time=False,
+            )
         start_local = datetime.combine(parsed_date, start_local_time, tzinfo=tz)
         end_local = datetime.combine(parsed_date, end_local_time, tzinfo=tz)
         if end_local <= start_local:
@@ -207,7 +217,17 @@ def parse_schedule(
 
     time_match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", lowered)
     if time_match:
-        start_local_time = _parse_clock(time_match.group(1), time_match.group(2), time_match.group(3))
+        try:
+            start_local_time = _parse_clock(time_match.group(1), time_match.group(2), time_match.group(3))
+        except ValueError:
+            return ParsedSchedule(
+                event_date=parsed_date,
+                start_at_utc=None,
+                end_at_utc=None,
+                is_all_day=True,
+                timezone=timezone_name,
+                has_explicit_time=False,
+            )
         start_local = datetime.combine(parsed_date, start_local_time, tzinfo=tz)
         end_local = start_local + timedelta(minutes=default_duration_minutes)
         return ParsedSchedule(
@@ -470,6 +490,10 @@ def _parse_date(text: str, reference_date: date) -> date | None:
 def _parse_clock(hour_str: str, minute_str: str | None, meridiem: str) -> time:
     hour = int(hour_str)
     minute = int(minute_str or "0")
+    if hour < 1 or hour > 12:
+        raise ValueError("invalid 12-hour clock hour")
+    if minute < 0 or minute > 59:
+        raise ValueError("invalid minute")
     if meridiem == "pm" and hour != 12:
         hour += 12
     if meridiem == "am" and hour == 12:
