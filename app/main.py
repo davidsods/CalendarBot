@@ -22,7 +22,7 @@ from app.services.approvals import ApprovalService
 from app.services.budget import BudgetService
 from app.services.extraction_utils import heuristic_extract
 from app.services.ingest import IngestService
-from app.services.integrations import GoogleOAuthService, SlackActionParser, SlackParsedAction
+from app.services.integrations import GoogleOAuthService, SlackActionParser, SlackNotifier, SlackParsedAction
 from app.services.maintenance import MaintenanceService
 from app.services.ollama_adapter import OllamaExtractorClient
 from app.services.processor import ProcessorService
@@ -41,10 +41,12 @@ def _write_audit_log(session: Session, event_type: str, payload: dict[str, objec
 
 
 def _process_slack_action(parsed_action: SlackParsedAction) -> None:
+    final_text = f"Suggestion #{parsed_action.suggestion_id} processed."
     with SessionLocal() as session:
         try:
             svc = ApprovalService(session)
             status = svc.handle_action(parsed_action.suggestion_id, parsed_action.action, parsed_action.edited_title)
+            final_text = f"Suggestion #{parsed_action.suggestion_id}: {status}."
             _write_audit_log(
                 session,
                 "slack_action_processed",
@@ -56,6 +58,7 @@ def _process_slack_action(parsed_action: SlackParsedAction) -> None:
             )
         except Exception as exc:
             session.rollback()
+            final_text = f"Suggestion #{parsed_action.suggestion_id}: failed ({exc})."
             try:
                 _write_audit_log(
                     session,
@@ -69,6 +72,11 @@ def _process_slack_action(parsed_action: SlackParsedAction) -> None:
             except Exception:
                 # Never bubble background-task errors back into Slack callback handling.
                 session.rollback()
+    if parsed_action.response_url:
+        try:
+            SlackNotifier.replace_interactive_message(parsed_action.response_url, final_text)
+        except Exception:
+            pass
 
 
 @app.on_event("startup")

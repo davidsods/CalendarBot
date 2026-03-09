@@ -44,6 +44,7 @@ def test_slack_signature_and_payload_parser() -> None:
     settings.slack_signing_secret = "test-secret"
     timestamp = str(int(datetime.now(timezone.utc).timestamp()))
     payload = {
+        "response_url": "https://hooks.slack.com/actions/T/A/123",
         "actions": [
             {
                 "action_id": "approve",
@@ -63,6 +64,30 @@ def test_slack_signature_and_payload_parser() -> None:
     assert parsed is not None
     assert parsed.suggestion_id == 42
     assert parsed.action == "edit_then_approve"
+    assert parsed.response_url == "https://hooks.slack.com/actions/T/A/123"
+
+
+def test_slack_notifier_replaces_interactive_message(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_urlopen(req: urllib.request.Request, timeout: int):  # type: ignore[no-untyped-def]
+        captured["url"] = req.full_url
+        captured["timeout"] = timeout
+        captured["payload"] = json.loads(req.data.decode("utf-8"))  # type: ignore[union-attr]
+        return _FakeHTTPResponse({"ok": True})
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    SlackNotifier.replace_interactive_message(
+        "https://hooks.slack.com/actions/T/A/123",
+        "Suggestion #42: approved.",
+    )
+
+    assert captured["url"] == "https://hooks.slack.com/actions/T/A/123"
+    assert captured["timeout"] == 10
+    assert captured["payload"] == {
+        "replace_original": True,
+        "text": "Suggestion #42: approved.",
+    }
 
 
 def test_slack_notifier_sends_calendar_preview(monkeypatch) -> None:

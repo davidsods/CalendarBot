@@ -20,6 +20,7 @@ class SlackParsedAction:
     suggestion_id: int
     action: str
     edited_title: str | None = None
+    response_url: str | None = None
 
 
 class SlackNotifier:
@@ -165,6 +166,18 @@ class SlackNotifier:
                 f"failed to send Slack suggestion (status={exc.code}, error={detail})"
             ) from exc
 
+    @staticmethod
+    def replace_interactive_message(response_url: str, text: str) -> None:
+        payload = {"replace_original": True, "text": text}
+        req = urllib.request.Request(
+            response_url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10):
+            return
+
 
 class SlackActionParser:
     @staticmethod
@@ -218,7 +231,11 @@ class SlackActionParser:
             else:
                 mapped = "edit_then_approve"
 
-            return SlackParsedAction(suggestion_id=int(value), action=mapped)
+            return SlackParsedAction(
+                suggestion_id=int(value),
+                action=mapped,
+                response_url=payload.get("response_url"),
+            )
         except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
             return None
 
