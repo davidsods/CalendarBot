@@ -51,7 +51,7 @@ class OllamaExtractorClient:
             "model": self.model,
             "stream": False,
             "format": "json",
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, "num_predict": 128},
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(user_payload)},
@@ -98,13 +98,15 @@ class OllamaExtractorClient:
             "confidence_tier must be one of likely,ambiguous,conflicted. "
             "action must be create,update,ignore. "
             "Use ISO-8601 for datetimes and YYYY-MM-DD for dates. "
-            "If invite should not be generated, set should_generate=false and action=ignore."
+            "If invite should not be generated, set should_generate=false and action=ignore. "
+            "Keep output concise: max 3 slot_candidates, max 8 evidence_message_ids, "
+            "decision_rationale under 220 chars, slack_summary under 180 chars."
         )
         payload = {
             "model": self.model,
             "stream": False,
             "format": "json",
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, "num_predict": 512},
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(context, default=_json_default)},
