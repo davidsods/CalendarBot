@@ -55,6 +55,7 @@ python relay/mac_relay.py
 
 - `DATABASE_URL` (default `sqlite:///./scheduler.db`)
 - `PROCESSOR_INTERVAL_HOURS` (default `3`)
+- `PROCESSOR_INTERVAL_SECONDS` (optional override for rapid testing; when set, it takes precedence)
 - `MONTHLY_BUDGET_CAP_USD` (default `15`)
 - `BUDGET_SAFETY_BUFFER_USD` (default `1`)
 - `ESTIMATED_LLAMA_COST_PER_MESSAGE_USD` (default `0.02`)

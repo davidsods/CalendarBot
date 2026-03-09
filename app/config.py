@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     database_url: str = Field(default="sqlite:///./scheduler.db", alias="DATABASE_URL")
 
     processor_interval_hours: int = Field(default=3, alias="PROCESSOR_INTERVAL_HOURS")
+    processor_interval_seconds: int | None = Field(default=None, alias="PROCESSOR_INTERVAL_SECONDS")
     monthly_budget_cap_usd: float = Field(default=15.0, alias="MONTHLY_BUDGET_CAP_USD")
     budget_safety_buffer_usd: float = Field(default=1.0, alias="BUDGET_SAFETY_BUFFER_USD")
     estimated_llama_cost_per_message_usd: float = Field(

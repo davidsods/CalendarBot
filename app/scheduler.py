@@ -20,10 +20,14 @@ def start_scheduler() -> None:
     if scheduler.running:
         return
 
+    trigger_kwargs: dict[str, int] = {"hours": settings.processor_interval_hours}
+    if settings.processor_interval_seconds and settings.processor_interval_seconds > 0:
+        trigger_kwargs = {"seconds": settings.processor_interval_seconds}
+
     scheduler.add_job(
         process_job,
         "interval",
-        hours=settings.processor_interval_hours,
+        **trigger_kwargs,
         id="periodic_processor",
         replace_existing=True,
     )
