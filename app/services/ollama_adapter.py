@@ -106,7 +106,7 @@ class OllamaExtractorClient:
             "model": self.model,
             "stream": False,
             "format": "json",
-            "options": {"temperature": 0, "num_predict": 512},
+            "options": {"temperature": 0, "num_predict": 160},
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": json.dumps(context, default=_json_default)},
