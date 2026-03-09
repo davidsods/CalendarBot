@@ -61,6 +61,19 @@ def test_parse_schedule_time_range_and_day_only_cases() -> None:
     assert day_only.end_at_utc is None
 
 
+def test_parse_schedule_invalid_clock_text_does_not_crash() -> None:
+    reference = datetime(2026, 3, 9, 18, 0, tzinfo=timezone.utc)
+    parsed = parse_schedule(
+        "Friday at 13pm",
+        reference_utc=reference,
+        default_timezone="America/Los_Angeles",
+    )
+    assert parsed.event_date is not None
+    assert parsed.is_all_day is True
+    assert parsed.start_at_utc is None
+    assert parsed.end_at_utc is None
+
+
 def test_extract_thread_includes_both_sides_in_summary() -> None:
     settings.ollama_base_url = None
     candidate = LlamaExtractor().extract_thread(
