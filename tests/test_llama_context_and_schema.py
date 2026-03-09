@@ -159,3 +159,97 @@ def test_extract_thread_falls_back_when_llama_payload_invalid(monkeypatch) -> No
 
     assert candidate.decision_source == "fallback"
     assert candidate.fallback_reason == "llama_invalid_output_or_error"
+
+
+def test_extract_thread_normalizes_common_llama_aliases(monkeypatch) -> None:
+    settings.ollama_base_url = "http://ollama.local"
+    settings.ollama_model = "llama3.2:1b"
+
+    def _alias_payload(self: OllamaExtractorClient, context: dict[str, object]) -> dict[str, object]:
+        return {
+            "should_generate": "true",
+            "state": "likely_consensus",
+            "confidence_label": "likely",
+            "decision_confidence": "0.77",
+            "decision_action": "create",
+            "title": "Coffee Chat",
+            "date": "2026-03-14",
+            "start_time": "2026-03-14T22:00:00Z",
+            "end_time": "2026-03-14T23:00:00Z",
+            "timezone": "America/Los_Angeles",
+            "recommendedSlotKey": "slot-1",
+            "slotCandidates": [
+                {
+                    "slot_key": "slot-1",
+                    "date": "2026-03-14",
+                    "start_time": "2026-03-14T22:00:00Z",
+                    "end_time": "2026-03-14T23:00:00Z",
+                    "timezone": "America/Los_Angeles",
+                    "title": "Coffee Chat",
+                    "support_ids": ["1", 2],
+                    "contradict_ids": ["9"],
+                    "score": "1.2",
+                    "recency_score": "0.5",
+                }
+            ],
+            "rationale": "They converged on Saturday afternoon.",
+            "summary": "Likely consensus",
+            "evidence_ids": ["1", "2"],
+        }
+
+    monkeypatch.setattr(OllamaExtractorClient, "extract_thread_decision", _alias_payload)
+
+    candidate = LlamaExtractor().extract_thread(
+        messages=[
+            {"id": 1, "sender_role": "other", "text": "Sat at 3?", "sent_at": datetime(2026, 3, 9, 18, 0)},
+            {"id": 2, "sender_role": "self", "text": "works", "sent_at": datetime(2026, 3, 9, 18, 1)},
+        ],
+        has_existing_thread_event=False,
+        reference_utc=datetime(2026, 3, 9, 18, 1),
+        existing_slots=[],
+        llama_context={"context_ready": True, "context_version": "v1", "default_timezone": "America/Los_Angeles"},
+    )
+
+    assert candidate.decision_source == "llama"
+    assert candidate.should_generate is True
+    assert candidate.confidence == 0.77
+    assert candidate.timezone == "America/Los_Angeles"
+    assert candidate.evidence_message_ids == [1, 2]
+    assert candidate.slot_candidates
+    assert candidate.slot_candidates[0].supporting_message_ids == [1, 2]
+    assert candidate.slot_candidates[0].contradicting_message_ids == [9]
+
+
+def test_extract_thread_llama_missing_date_downgrades_to_ignore(monkeypatch) -> None:
+    settings.ollama_base_url = "http://ollama.local"
+    settings.ollama_model = "llama3.2:1b"
+
+    def _missing_date(self: OllamaExtractorClient, context: dict[str, object]) -> dict[str, object]:
+        return {
+            "should_generate": True,
+            "thread_state": "candidate_slots",
+            "confidence_tier": "ambiguous",
+            "decision_confidence": 0.42,
+            "action": "create",
+            "title": "Catch up",
+            "timezone": "America/Los_Angeles",
+            "slot_candidates": [],
+            "decision_rationale": "No clear date selected yet.",
+            "evidence_message_ids": [1],
+        }
+
+    monkeypatch.setattr(OllamaExtractorClient, "extract_thread_decision", _missing_date)
+
+    candidate = LlamaExtractor().extract_thread(
+        messages=[
+            {"id": 1, "sender_role": "other", "text": "we should meet sometime", "sent_at": datetime(2026, 3, 9, 18, 0)},
+        ],
+        has_existing_thread_event=False,
+        reference_utc=datetime(2026, 3, 9, 18, 1),
+        existing_slots=[],
+        llama_context={"context_ready": True, "context_version": "v1", "default_timezone": "America/Los_Angeles"},
+    )
+
+    assert candidate.decision_source == "llama"
+    assert candidate.should_generate is False
+    assert candidate.action == "ignore"
