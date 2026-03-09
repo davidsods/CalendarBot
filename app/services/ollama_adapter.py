@@ -159,7 +159,7 @@ class OllamaExtractorClient:
             "model": self.model,
             "stream": False,
             "format": _THREAD_DECISION_FORMAT_SCHEMA,
-            "options": {"temperature": 0, "num_predict": 160},
+            "options": {"temperature": 0, "num_predict": 320},
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {

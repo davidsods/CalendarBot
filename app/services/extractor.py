@@ -283,13 +283,36 @@ class LlamaExtractor:
             or out.get("conversation_state")
             or "exploring"
         ).strip().lower()
+        state_aliases = {
+            "pending": "candidate_slots",
+            "consensus": "likely_consensus",
+            "likely": "likely_consensus",
+            "agreed": "confirmed",
+            "reschedule": "reschedule_pending",
+            "rescheduled": "reschedule_pending",
+            "cancel": "canceled",
+            "cancelled": "canceled",
+        }
+        out["thread_state"] = state_aliases.get(out["thread_state"], out["thread_state"])
         out["confidence_tier"] = str(
             out.get("confidence_tier")
             or out.get("confidence_label")
             or out.get("tier")
             or "ambiguous"
         ).strip().lower()
+        tier_aliases = {"high": "likely", "medium": "ambiguous", "low": "conflicted", "uncertain": "ambiguous"}
+        out["confidence_tier"] = tier_aliases.get(out["confidence_tier"], out["confidence_tier"])
         out["action"] = str(out.get("action") or out.get("decision_action") or "ignore").strip().lower()
+        action_aliases = {
+            "schedule": "create",
+            "create_invite": "create",
+            "create_event": "create",
+            "modify": "update",
+            "reschedule": "update",
+            "none": "ignore",
+            "no_action": "ignore",
+        }
+        out["action"] = action_aliases.get(out["action"], out["action"])
         out["decision_confidence"] = self._coerce_float(out.get("decision_confidence"), 0.0)
         out["should_generate"] = self._coerce_bool(out.get("should_generate"))
         out["title"] = str(out.get("title") or "Meeting").strip() or "Meeting"
