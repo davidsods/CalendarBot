@@ -76,6 +76,26 @@ def test_ingest_normalizes_timezone_aware_datetimes_to_naive_utc(db_session: Ses
     assert record.sent_at == datetime(2026, 3, 1, 17, 30)
 
 
+def test_ingest_handles_timezone_aware_checkpoint(db_session: Session) -> None:
+    aware_cutoff = datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
+    db_session.add(ProcessingCheckpoint(id=1, last_successful_processed_at=aware_cutoff))
+    db_session.flush()
+
+    service = IngestService(db_session)
+    result = service.ingest_batch(
+        "batch-1",
+        [
+            _msg("m-aware-old", datetime(2026, 3, 1, 11, 59, 0, tzinfo=timezone.utc)),
+            _msg("m-aware-new", datetime(2026, 3, 1, 12, 1, 0, tzinfo=timezone.utc)),
+        ],
+    )
+
+    ids = db_session.scalars(select(MessageRecord.external_message_id).order_by(MessageRecord.id)).all()
+    assert result.deduped == 1
+    assert result.queued == 1
+    assert ids == ["m-aware-new"]
+
+
 def test_ingest_dedupes_duplicate_external_id_in_same_batch(db_session: Session) -> None:
     now = datetime.now(timezone.utc)
     service = IngestService(db_session)

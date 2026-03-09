@@ -34,6 +34,8 @@ class IngestService:
         checkpoint = self._checkpoint()
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
         checkpoint_cutoff = checkpoint.last_successful_processed_at
+        if checkpoint_cutoff and checkpoint_cutoff.tzinfo:
+            checkpoint_cutoff = checkpoint_cutoff.astimezone(timezone.utc).replace(tzinfo=None)
         # Guard against a future-skewed checkpoint blocking all new ingestion.
         if checkpoint_cutoff and checkpoint_cutoff > now_utc + timedelta(minutes=5):
             checkpoint_cutoff = None
